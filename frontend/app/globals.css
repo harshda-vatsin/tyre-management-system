@@ -1,0 +1,1630 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Design tokens -- light theme (default) -------------------------------
+     EBTMS is light-first: this block is what ships with no theme choice
+     made yet. The [data-theme="dark"] block below overrides every one of
+     these names with its own values -- it is a considered second theme,
+     not an inversion, so components that consume these tokens (rather than
+     hardcoded colours) re-theme correctly without any further changes. */
+  --bg: #f6f9f8;
+  --surface: #ffffff;
+  --surface-muted: #eef3f2;
+
+  --primary: #0e9c93;
+  --primary-hover: #0b8079;
+  --primary-soft: #e3f6f4;
+
+  --border: #e1e8e6;
+  --border-strong: #cbd7d5;
+
+  --text: #101a1a;
+  --text-secondary: #4b5b5a;
+  --text-muted: #82908f;
+
+  --success: #157f45;
+  --success-bg: #e3f3e9;
+  --warning: #9a6700;
+  --warning-bg: #fdf0d5;
+  --danger: #b3261e;
+  --danger-bg: #fbe4e1;
+  --info: #1d4ed8;
+  --info-bg: #e3ebfc;
+
+  /* Sidebar / shell chrome -- deliberately its own token set so the
+     sidebar can read as "white, colour reserved for the active route"
+     without every component that happens to sit inside it needing its
+     own dark-mode-aware styling. */
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e6ece9;
+  --sidebar-ink: #45585c;
+  --sidebar-ink-strong: #101a1a;
+  --sidebar-hover: #f1f5f4;
+  --sidebar-active-bg: var(--primary-soft);
+  --sidebar-active-ink: #0b6e66;
+  --sidebar-rail: var(--primary);
+  --sidebar-label: #93a3a1;
+
+  /* Fixed dark viewfinder chrome for the QR scanner -- not a "surface",
+     more like camera-overlay chrome, so it stays constant across themes. */
+  --scanner-bg: #0d1614;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-sm: 0 1px 2px rgba(16, 26, 26, 0.07);
+  --shadow-md: 0 3px 10px rgba(16, 26, 26, 0.07);
+  --shadow-lg: 0 16px 36px rgba(16, 26, 26, 0.16);
+
+  --sidebar-width: 248px;
+  --topbar-height: 60px;
+}
+
+/* Design tokens -- dark theme (explicit opt-in only) ---------------------
+   Applied via [data-theme="dark"] on <html>, set by ThemeProvider from a
+   persisted user choice. Never applied from prefers-color-scheme -- first
+   visit is always Light (see ThemeProvider.jsx). Re-tuned per role for
+   contrast on a dark surface, not a mechanical inversion of the block above. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0d1614;
+  --surface: #121c1a;
+  --surface-muted: #182422;
+
+  --primary: #2bc9bb;
+  --primary-hover: #45d8ca;
+  --primary-soft: #113330;
+
+  --border: #24332f;
+  --border-strong: #324742;
+
+  --text: #eef6f4;
+  --text-secondary: #a9bcb9;
+  --text-muted: #6d8280;
+
+  --success: #3ecf7e;
+  --success-bg: #123423;
+  --warning: #f2b134;
+  --warning-bg: #3a2c0f;
+  --danger: #f2545b;
+  --danger-bg: #3a1416;
+  --info: #6ba3fb;
+  --info-bg: #142a4a;
+
+  --sidebar-bg: #0a1412;
+  --sidebar-border: #1c2b28;
+  --sidebar-ink: #a9bcb9;
+  --sidebar-ink-strong: #eef6f4;
+  --sidebar-hover: #142220;
+  --sidebar-active-bg: var(--primary-soft);
+  --sidebar-active-ink: #7fe9dc;
+  --sidebar-rail: var(--primary);
+  --sidebar-label: #587169;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 46px rgba(0, 0, 0, 0.55);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+h1, h2, h3, h4 {
+  margin: 0 0 0.25rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+p {
+  color: var(--text-secondary);
+}
+
+a {
+  color: var(--primary);
+}
+
+/* App shell ------------------------------------------------------------ */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  color: var(--sidebar-ink);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.15rem 1.25rem;
+  border-bottom: 1px solid var(--sidebar-border);
+  flex-shrink: 0;
+}
+
+.sidebar-brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.sidebar-brand-text strong {
+  font-size: 0.95rem;
+  color: var(--sidebar-ink-strong);
+}
+
+.sidebar-brand-text span {
+  font-size: 0.68rem;
+  color: var(--sidebar-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.85rem 0.75rem;
+}
+
+.sidebar-group {
+  margin-bottom: 1.1rem;
+}
+
+.sidebar-group-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sidebar-label);
+  padding: 0 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--sidebar-ink);
+  text-decoration: none;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.15rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  position: relative;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.sidebar-nav a svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.sidebar-nav a:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-ink-strong);
+}
+
+.sidebar-nav a.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-ink);
+  font-weight: 700;
+}
+
+.sidebar-nav a.active::before {
+  content: "";
+  position: absolute;
+  left: -0.75rem;
+  top: 0.3rem;
+  bottom: 0.3rem;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--sidebar-rail);
+}
+
+.sidebar-nav a.active svg {
+  opacity: 1;
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--sidebar-border);
+  padding: 0.75rem;
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--sidebar-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-user:hover {
+  background: var(--sidebar-hover);
+}
+
+.sidebar-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sidebar-user-meta {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.2;
+}
+
+.sidebar-user-meta strong {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--sidebar-ink-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-user-meta span {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--sidebar-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-theme-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-theme-toggle:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.sidebar-user-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0.75rem;
+  right: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 40;
+}
+
+.sidebar-user-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface);
+  color: var(--danger);
+  border: none;
+  border-radius: 0;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.sidebar-user-menu button:hover {
+  background: var(--danger-bg);
+}
+
+.mobile-topbar {
+  display: none;
+}
+
+.main-content {
+  flex: 1;
+  padding: 1.75rem 2rem 3rem;
+  min-width: 0;
+}
+
+/* Page header ------------------------------------------------------------ */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.page-header-title h2 {
+  font-size: 1.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.page-header-title p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.page-header-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.page-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-decoration: none;
+  margin-bottom: 0.65rem;
+}
+
+.page-back-link:hover {
+  color: var(--primary);
+}
+
+/* Cards ------------------------------------------------------------------ */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
+}
+
+.card-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.9rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.card-title-row h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.card-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: -0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem;
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.detail-grid > div {
+  min-width: 0;
+}
+
+.detail-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.detail-value {
+  font-size: 0.92rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Stat cards / KPIs -------------------------------------------------------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--stat-accent, var(--primary));
+}
+
+.stat-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-card-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-bottom: 0.3rem;
+}
+
+.stat-card-value {
+  font-family: var(--font-mono);
+  font-size: 1.65rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.stat-card-sublabel {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+/* Buttons ------------------------------------------------------------------ */
+
+button, .btn {
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.9rem;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  line-height: 1.2;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+
+button:hover, .btn:hover {
+  background: var(--primary-hover);
+}
+
+button:disabled, .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.secondary, .btn.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+button.secondary:hover, .btn.secondary:hover {
+  background: var(--surface-muted);
+  border-color: var(--text-muted);
+}
+
+button.danger, .btn.danger {
+  background: var(--danger);
+}
+
+button.danger:hover, .btn.danger:hover {
+  background: #94211a;
+}
+
+button.ghost, .btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+  padding: 0.4rem;
+}
+
+button.ghost:hover, .btn.ghost:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+button.icon-btn {
+  padding: 0.4rem;
+  width: 32px;
+  height: 32px;
+  justify-content: center;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 0.87rem;
+}
+
+input, select, textarea {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+input:disabled, select:disabled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%234b5b5a' stroke-width='1.6'%3E%3Cpath d='M5 7.5l5 5 5-5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 16px;
+  padding-right: 2rem;
+}
+
+/* The chevron is a baked SVG data-URI (can't reference custom properties),
+   so dark theme needs its own copy with a light-enough stroke to read
+   against a dark select background. */
+[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23a9bcb9' stroke-width='1.6'%3E%3Cpath d='M5 7.5l5 5 5-5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.field {
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.field-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.input-suffix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-suffix-wrap input {
+  padding-right: 2.6rem;
+}
+
+.input-suffix {
+  position: absolute;
+  right: 0.7rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.form-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.form-section-title:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.position-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.35rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+/* Toolbar / filter bar ------------------------------------------------------ */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+  align-items: flex-end;
+}
+
+.toolbar .field {
+  margin-bottom: 0;
+}
+
+/* Tables --------------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+td.wrap, th.wrap {
+  white-space: normal;
+}
+
+th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-muted);
+}
+
+tbody tr {
+  transition: background 0.1s ease;
+}
+
+tbody tr:hover {
+  background: var(--surface-muted);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tr.row-accent-critical td:first-child {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+/* Row actions menu ------------------------------------------------------------ */
+
+.row-actions {
+  position: relative;
+  display: inline-block;
+}
+
+.row-actions-menu {
+  /* position (fixed/top/right) is set inline per-instance in RowActionsMenu.jsx */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 170px;
+  z-index: 30;
+  overflow: hidden;
+  padding: 0.3rem;
+}
+
+.row-actions-menu button {
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  justify-content: flex-start;
+  flex-shrink: 0;
+}
+
+.row-actions-menu button:hover {
+  background: var(--surface-muted);
+}
+
+.row-actions-menu button.danger {
+  color: var(--danger);
+  background: transparent;
+}
+
+.row-actions-menu button.danger:hover {
+  background: var(--danger-bg);
+}
+
+/* Badges -------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Status reads as colour + shape + word, never colour alone -- every
+   badge gets a dot in `currentColor`, so it automatically matches
+   whatever ink colour that badge's status variant sets below. */
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.badge-warning, .badge.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.badge-critical, .badge.danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.badge-open {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.badge-acknowledged {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.badge-resolved, .badge-success, .badge.success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge-info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.badge-escalated {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* Empty / loading states ----------------------------------------------------- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text-muted);
+}
+
+.empty-state-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.85rem;
+  color: var(--text-muted);
+}
+
+.empty-state-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.empty-state-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  max-width: 340px;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Drawer / modal overlay ------------------------------------------------------ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 56, 0.5);
+  z-index: 50;
+  display: flex;
+}
+
+.modal-panel {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  width: 440px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  margin: auto;
+  padding: 1.25rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.drawer-panel {
+  background: var(--surface);
+  width: 460px;
+  max-width: 92vw;
+  height: 100%;
+  margin-left: auto;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  animation: slide-in 0.18s ease;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.drawer-header h3 {
+  font-size: 1.02rem;
+}
+
+.drawer-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.drawer-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+/* Misc ------------------------------------------------------------------------ */
+
+.error-text {
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.success-text {
+  color: var(--success);
+  font-size: 0.85rem;
+}
+
+/* Identifiers/readings render in monospace with tabular figures -- the way
+   they're already handwritten on paper tyre cards -- separate from prose. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.reading-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.reading-value[data-flag="unset"],
+.reading-value[data-flag="OK"] {
+  color: inherit;
+}
+
+.reading-value[data-flag="WARNING"] {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.reading-value[data-flag="CRITICAL"] {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.step-indicator-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.step-indicator-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+  flex-shrink: 0;
+}
+
+.step-indicator-item.active .step-indicator-num {
+  background: var(--primary);
+  color: #fff;
+}
+
+.step-indicator-item.active {
+  color: var(--text);
+}
+
+.step-indicator-item.done .step-indicator-num {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.step-indicator-sep {
+  width: 24px;
+  height: 1px;
+  background: var(--border-strong);
+  flex-shrink: 0;
+}
+
+.scanner-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--scanner-bg);
+}
+
+.scanner-corner {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  border-color: var(--primary);
+  border-style: solid;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.scanner-corner.tl { top: 14px; left: 14px; border-width: 3px 0 0 3px; border-top-left-radius: 6px; }
+.scanner-corner.tr { top: 14px; right: 14px; border-width: 3px 3px 0 0; border-top-right-radius: 6px; }
+.scanner-corner.bl { bottom: 14px; left: 14px; border-width: 0 0 3px 3px; border-bottom-left-radius: 6px; }
+.scanner-corner.br { bottom: 14px; right: 14px; border-width: 0 3px 3px 0; border-bottom-right-radius: 6px; }
+
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  border: 1px solid transparent;
+}
+
+.status-banner.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.status-banner.success {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.status-banner.info {
+  background: var(--info-bg);
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 25%, transparent);
+}
+
+.login-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  /* A deliberate fixed brand backdrop behind the login card, not a themed
+     surface -- it doesn't need to track the light/dark toggle. */
+  background: radial-gradient(circle at top left, #16302e, #0d1614);
+}
+
+.login-card {
+  background: var(--surface);
+  padding: 2.25rem 2rem;
+  border-radius: var(--radius-lg);
+  width: 340px;
+  box-shadow: var(--shadow-lg);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-brand .sidebar-brand-mark {
+  background: var(--primary);
+}
+
+.login-card h2 {
+  margin-top: 0;
+}
+
+/* Bus tyre diagram (Batch Inspection) ------------------------------------------- */
+
+.bus-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto 1.25rem;
+}
+
+.bus-diagram-body {
+  /* Landscape wheel footprints, attached to a continuous chassis rather
+     than floating inside a padded outline. Tunable per breakpoint below.
+     --row-h (axle-to-axle spacing) is deliberately much larger than
+     --wheel-h (the wheel's own visual height): the chassis's length comes
+     from generous row height, not from stretching the wheel shape, and the
+     leftover space in the first/last row reads as the vehicle's nose/tail
+     instead of empty margin below a short diagram. */
+  --wheel-w: 92px;
+  --wheel-h: 42px;
+  --wheel-gap: 5px;
+  --chassis-w: 76px;
+  --row-h: 118px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+}
+
+.bus-diagram-end {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* One CSS grid row per axle -- every position sharing that axle's `row`
+   (from busLayout.js metadata) is placed on the same grid row, so it is
+   structurally impossible for a dual pair to render staggered. Row height
+   (not row-gap) is what spaces the axles, so a wheel can be centered
+   inside a much taller band without changing its own footprint. */
+.bus-diagram-grid {
+  display: grid;
+  grid-template-columns:
+    calc(var(--wheel-w) * 2 + var(--wheel-gap))
+    var(--chassis-w)
+    calc(var(--wheel-w) * 2 + var(--wheel-gap));
+  column-gap: var(--wheel-gap);
+  row-gap: 0;
+}
+
+.bus-diagram-chassis {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--primary) 12%, var(--surface-muted)),
+    var(--surface) 16%,
+    var(--surface) 84%,
+    color-mix(in srgb, var(--primary) 12%, var(--surface-muted)));
+  border: 2px solid color-mix(in srgb, var(--primary) 40%, var(--border-strong));
+  border-radius: 46% 46% 10% 10% / 20% 20% 6% 6%;
+}
+
+.bus-diagram-chassis::before {
+  content: "";
+  position: absolute;
+  top: 8%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 58%;
+  height: 11%;
+  border-radius: 0 0 40% 40%;
+  background: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.bus-diagram-cell {
+  position: relative;
+}
+
+.bus-diagram-cell.cell-left {
+  grid-column: 1;
+}
+
+.bus-diagram-cell.cell-right {
+  grid-column: 3;
+}
+
+/* Inner/outer is purely horizontal, decided by which edge of the cell a
+   slot is pinned to -- it never touches vertical placement, so it can't
+   drift a wheel off its axle's row. A single front-axle wheel uses the
+   outer edge, the same track line an outer dual wheel sits on. Vertically,
+   every slot is centred within its (tall) row band. */
+.bus-diagram-slot {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--wheel-w);
+  height: var(--wheel-h);
+}
+
+.cell-left .slot-outer { left: 0; }
+.cell-left .slot-inner { right: 0; }
+.cell-right .slot-inner { left: 0; }
+.cell-right .slot-outer { right: 0; }
+
+/* Raise the whole slot (wheel + its tooltip) above neighbouring rows while
+   active, so the tooltip never renders underneath an adjacent axle's chip.
+   Falls back to normal stacking order in browsers without :has(). */
+.bus-diagram-slot:has(.bus-diagram-tyre:hover),
+.bus-diagram-slot:has(.bus-diagram-tyre:focus-visible) {
+  z-index: 10;
+}
+
+.bus-diagram-body-fallback {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  max-width: 320px;
+}
+
+.bus-diagram-body-fallback .bus-diagram-tyre {
+  width: var(--wheel-w);
+  height: var(--wheel-h);
+}
+
+.bus-diagram-tyre {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.bus-diagram-tyre:hover {
+  border-color: var(--primary);
+}
+
+.bus-diagram-tyre .position-code {
+  font-size: 0.5rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+.bus-diagram-tyre .tyre-number {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.1;
+}
+
+/* Empty slots have room to show "Empty" inline (there's no tyre number
+   competing for space), so it stays a plain third line. Mounted slots keep
+   the NSD/pressure recap or status word available -- just not permanently
+   inline, since a wheel this short can't hold three legible lines -- as an
+   accessible hover/focus tooltip on the same interactive element, so no
+   information that used to be visible is actually lost. */
+.bus-diagram-tyre.empty .reading-summary {
+  font-size: 0.5rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.bus-diagram-tyre:not(.empty) .reading-summary {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%) translateY(4px);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  padding: 0.3rem 0.55rem;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.bus-diagram-tyre:not(.empty) .reading-summary::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--text);
+}
+
+.bus-diagram-tyre:not(.empty):hover .reading-summary,
+.bus-diagram-tyre:not(.empty):focus-visible .reading-summary {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.bus-diagram-tyre.has-reading {
+  border-width: 2px;
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 20%, var(--surface));
+}
+
+.bus-diagram-tyre.has-reading .tyre-number,
+.bus-diagram-tyre.has-reading .reading-summary {
+  color: var(--success);
+}
+
+.bus-diagram-tyre.empty {
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.7;
+}
+
+.bus-diagram-tyre.empty:hover {
+  border-color: var(--primary);
+  opacity: 1;
+}
+
+.bus-diagram-tyre.highlighted {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 40%, transparent);
+  animation: tyre-pulse 1.1s ease-in-out infinite;
+  z-index: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bus-diagram-tyre.highlighted {
+    animation: none;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+}
+
+.bus-diagram-tyre.flag-warning {
+  border-width: 2px;
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 20%, var(--surface));
+}
+
+.bus-diagram-tyre.flag-warning .tyre-number,
+.bus-diagram-tyre.flag-warning .reading-summary {
+  color: var(--warning);
+}
+
+.bus-diagram-tyre.flag-critical {
+  border-width: 2px;
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 22%, var(--surface));
+}
+
+.bus-diagram-tyre.flag-critical .tyre-number,
+.bus-diagram-tyre.flag-critical .reading-summary {
+  color: var(--danger);
+}
+
+/* The tooltip's background is already the status colour (via the chip's
+   own border/fill underneath it) -- its own surface is deliberately
+   inverted-neutral (var(--text) on var(--bg)) for legibility regardless of
+   flag state, so it must not inherit the status ink colour above. */
+.bus-diagram-tyre.has-reading:not(.empty) .reading-summary,
+.bus-diagram-tyre.flag-warning:not(.empty) .reading-summary,
+.bus-diagram-tyre.flag-critical:not(.empty) .reading-summary {
+  color: var(--bg);
+}
+
+/* BusTyreDiagram is also used as a set of links (Bus detail page's read-only
+   layout) rather than buttons (Batch Inspection's editable slots). */
+a.bus-diagram-tyre {
+  text-decoration: none;
+  color: inherit;
+}
+
+@keyframes tyre-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+}
+
+/* Responsive ------------------------------------------------------------------- */
+
+@media (max-width: 960px) {
+  .sidebar {
+    position: fixed;
+    left: -100%;
+    top: 0;
+    z-index: 60;
+    transition: left 0.2s ease;
+    width: 260px;
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 31, 56, 0.45);
+    z-index: 55;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1.25rem;
+    background: var(--sidebar-bg);
+    color: var(--sidebar-ink-strong);
+    border-bottom: 1px solid var(--sidebar-border);
+    position: sticky;
+    top: 0;
+    z-index: 45;
+  }
+
+  .mobile-topbar button {
+    background: transparent;
+    padding: 0.3rem;
+  }
+
+  .main-content {
+    padding: 1.25rem 1rem 2.5rem;
+  }
+
+  .drawer-panel {
+    width: 100%;
+    max-width: 100vw;
+  }
+}
+
+@media (max-width: 720px) {
+  .stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .grid-2col {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header {
+    flex-direction: column;
+  }
+
+  .page-header-actions {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bus-diagram-body {
+    --wheel-w: 64px;
+    --wheel-h: 30px;
+    --chassis-w: 52px;
+    --wheel-gap: 3px;
+    --row-h: 88px;
+  }
+
+  .bus-diagram-tyre {
+    padding: 1px 3px;
+  }
+
+  .bus-diagram-tyre .tyre-number {
+    font-size: 0.52rem;
+  }
+
+  .bus-diagram-tyre .position-code {
+    font-size: 0.44rem;
+  }
+}
