@@ -221,7 +221,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),
     username TEXT,
-    action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER')),
+    action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER', 'AMEND_EVENT')),
     entity_type TEXT NOT NULL,
     entity_id TEXT,
     before_json TEXT,

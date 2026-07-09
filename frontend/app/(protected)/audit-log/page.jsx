@@ -9,6 +9,13 @@ import PageHeader from '../../../components/PageHeader.jsx';
 import Modal from '../../../components/Modal.jsx';
 import EmptyState from '../../../components/EmptyState.jsx';
 import LoadingState from '../../../components/LoadingState.jsx';
+import {
+  formatAuditEntry,
+  formatFieldLabel,
+  formatValue,
+  humanizeEventType,
+  humanizePosition,
+} from '../../../lib/auditFormatter.js';
 
 const ENTITY_LABELS = {
   tyre: 'Tyre',
@@ -19,13 +26,16 @@ const ENTITY_LABELS = {
   depot: 'Depot',
   bus_model: 'Bus Model',
   bus: 'Bus',
+  system_setting: 'System Setting',
 };
 
-const ACTION_BADGE = { CREATE: 'badge-success', UPDATE: 'badge-warning', DELETE: 'badge-critical', TRANSFER: 'badge-info' };
-
-function humanizeEntity(type) {
-  return ENTITY_LABELS[type] || type;
-}
+const ACTION_BADGE = {
+  CREATE: 'badge-success',
+  UPDATE: 'badge-warning',
+  DELETE: 'badge-critical',
+  TRANSFER: 'badge-info',
+  AMEND_EVENT: 'badge-warning',
+};
 
 function formatDate(value) {
   if (!value) return '—';
@@ -80,7 +90,11 @@ export default function AuditLogPage() {
       if (filters.to) params.set('to', filters.to);
 
       const res = await api.get(`/audit?${params.toString()}`);
-      setLogs(res.data || []);
+      
+      // Enriched logs using formatting utility
+      const formattedRows = (res.data || []).map(formatAuditEntry);
+      
+      setLogs(formattedRows);
       setTotal(res.total || 0);
     } catch (err) {
       setError(err.message);
@@ -106,21 +120,20 @@ export default function AuditLogPage() {
     });
   }
 
-  function getChangedFields(beforeStr, afterStr) {
+  function getChangedFieldsList(before, after) {
+    if (!before || !after) return [];
     try {
-      const before = beforeStr ? JSON.parse(beforeStr) : {};
-      const after = afterStr ? JSON.parse(afterStr) : {};
       const allKeys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
       const changes = [];
       for (const key of allKeys) {
-        if (['created_at', 'updated_at'].includes(key)) continue;
+        if (['created_at', 'updated_at', 'updated_by', 'id'].includes(key)) continue;
         const bVal = before[key];
         const aVal = after[key];
         if (JSON.stringify(bVal) !== JSON.stringify(aVal)) {
           changes.push({
             field: key,
-            before: bVal !== undefined ? JSON.stringify(bVal) : '(none)',
-            after: aVal !== undefined ? JSON.stringify(aVal) : '(none)',
+            before: bVal,
+            after: aVal,
           });
         }
       }
@@ -138,63 +151,307 @@ export default function AuditLogPage() {
     );
   }
 
+  // Render modal layout depending on entity type and action type
+  function renderModalDetails(log) {
+    const { action, entity_type, before, after } = log;
+
+    // Check if it is a threshold modification
+    if (entity_type === 'threshold') {
+      const isOverride = (after?.scope_type || before?.scope_type) === 'DEPOT';
+      return (
+        <div style={{ marginBottom: '1rem' }}>
+          <div className="form-section-title">Threshold Change Details</div>
+          <div className="detail-grid" style={{ gap: '1rem 1.5rem' }}>
+            <div><div className="detail-label">Threshold Parameter</div><div className="detail-value">{after?.parameter_type || before?.parameter_type}</div></div>
+            <div><div className="detail-label">Scope</div><div className="detail-value">{isOverride ? 'Depot Override' : 'Global'}</div></div>
+            {isOverride && (
+              <div><div className="detail-label">Depot</div><div className="detail-value">{after?.depot_name || before?.depot_name || `Depot ID: ${after?.scope_id || before?.scope_id}`}</div></div>
+            )}
+            <div><div className="detail-label">Previous Value</div><div className="detail-value" style={{ color: 'var(--text-danger)', fontWeight: 600 }}>
+              {before ? `${before.warning_max || before.warning_min || '—'} ${before.unit || ''}` : 'Not set'}
+            </div></div>
+            <div><div className="detail-label">New Value</div><div className="detail-value" style={{ color: 'var(--text-success)', fontWeight: 600 }}>
+              {after ? `${after.warning_max || after.warning_min || '—'} ${after.unit || ''}` : 'Not set'}
+            </div></div>
+            {action === 'UPDATE' && before && after && (
+              <div style={{ gridColumn: '1 / -1', marginTop: '0.5rem' }}>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Setting Type</th>
+                        <th>Previous Value</th>
+                        <th>New Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {before.warning_min !== after.warning_min && (
+                        <tr>
+                          <td>Warning Limit (Min)</td>
+                          <td>{formatValue('warning_min', before.warning_min, before)}</td>
+                          <td style={{ color: 'var(--text-success)', fontWeight: 600 }}>{formatValue('warning_min', after.warning_min, after)}</td>
+                        </tr>
+                      )}
+                      {before.warning_max !== after.warning_max && (
+                        <tr>
+                          <td>Warning Limit (Max)</td>
+                          <td>{formatValue('warning_max', before.warning_max, before)}</td>
+                          <td style={{ color: 'var(--text-success)', fontWeight: 600 }}>{formatValue('warning_max', after.warning_max, after)}</td>
+                        </tr>
+                      )}
+                      {before.critical_min !== after.critical_min && (
+                        <tr>
+                          <td>Critical Limit (Min)</td>
+                          <td>{formatValue('critical_min', before.critical_min, before)}</td>
+                          <td style={{ color: 'var(--text-success)', fontWeight: 600 }}>{formatValue('critical_min', after.critical_min, after)}</td>
+                        </tr>
+                      )}
+                      {before.critical_max !== after.critical_max && (
+                        <tr>
+                          <td>Critical Limit (Max)</td>
+                          <td>{formatValue('critical_max', before.critical_max, before)}</td>
+                          <td style={{ color: 'var(--text-success)', fontWeight: 600 }}>{formatValue('critical_max', after.critical_max, after)}</td>
+                        </tr>
+                      )}
+                      {before.is_active !== after.is_active && (
+                        <tr>
+                          <td>Active Status</td>
+                          <td>{before.is_active ? 'Active' : 'Inactive'}</td>
+                          <td style={{ color: after.is_active ? 'var(--text-success)' : 'var(--text-danger)', fontWeight: 600 }}>
+                            {after.is_active ? 'Active' : 'Inactive'}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (action === 'TRANSFER') {
+      return (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div className="form-section-title">Transfer Details</div>
+          <div className="detail-grid" style={{ gap: '1rem 1.5rem' }}>
+            <div>
+              <div className="detail-label">From Depot</div>
+              <div className="detail-value" style={{ color: 'var(--text-danger)', fontWeight: 600 }}>
+                {formatValue('from_depot_id', before?.from_depot_id, before)}
+              </div>
+            </div>
+            <div>
+              <div className="detail-label">To Depot</div>
+              <div className="detail-value" style={{ color: 'var(--text-success)', fontWeight: 600 }}>
+                {formatValue('to_depot_id', after?.to_depot_id, after)}
+              </div>
+            </div>
+            {before?.from_bus_id && (
+              <>
+                <div>
+                  <div className="detail-label">From Bus / Position</div>
+                  <div className="detail-value">{formatValue('from_bus_id', before.from_bus_id, before)} / {humanizePosition(before.from_position)}</div>
+                </div>
+                <div>
+                  <div className="detail-label">To Bus / Position</div>
+                  <div className="detail-value">{formatValue('to_bus_id', after.to_bus_id, after)} / {humanizePosition(after.to_position)}</div>
+                </div>
+              </>
+            )}
+            {after?.reason && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div className="detail-label">Reason</div>
+                <div className="detail-value" style={{ fontStyle: 'italic' }}>{after.reason}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (action === 'AMEND_EVENT') {
+      const corrVals = after?.corrected_values || {};
+      const originalVals = before || {};
+      return (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div className="form-section-title">Event Amendment Details</div>
+          <div style={{ marginBottom: '1rem' }}>
+            <div className="detail-label">Reason for Amendment</div>
+            <div className="detail-value" style={{ padding: '0.5rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--primary)', fontStyle: 'italic' }}>
+              {after?.reason || 'No reason provided'}
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Field Name</th>
+                  <th>Original Value</th>
+                  <th>Amended Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.keys(corrVals).map((field) => (
+                  <tr key={field}>
+                    <td style={{ fontWeight: 600 }}>{formatFieldLabel(field)}</td>
+                    <td>{formatValue(field, originalVals[field], originalVals)}</td>
+                    <td style={{ color: 'var(--text-success)', fontWeight: 600 }}>
+                      {formatValue(field, corrVals[field], corrVals)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    if (action === 'CREATE') {
+      const fields = Object.entries(after || {}).filter(([key, val]) => {
+        // filter out internal technical keys
+        return !['id', 'created_at', 'updated_at', 'updated_by', 'before_json', 'after_json'].includes(key) && val !== null && val !== undefined && val !== '';
+      });
+
+      return (
+        <div style={{ marginBottom: '1rem' }}>
+          <div className="form-section-title">Created Record Parameters</div>
+          <div className="detail-grid" style={{ gap: '0.85rem 1.5rem' }}>
+            {fields.map(([key, value]) => (
+              <div key={key}>
+                <div className="detail-label">{formatFieldLabel(key)}</div>
+                <div className="detail-value">{formatValue(key, value, after)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (action === 'DELETE') {
+      const fields = Object.entries(before || {}).filter(([key, val]) => {
+        return !['id', 'created_at', 'updated_at', 'updated_by'].includes(key) && val !== null && val !== undefined && val !== '';
+      });
+
+      return (
+        <div style={{ marginBottom: '1rem' }}>
+          <div className="form-section-title">Deleted Record Attributes</div>
+          <div className="detail-grid" style={{ gap: '0.85rem 1.5rem' }}>
+            {fields.map(([key, value]) => (
+              <div key={key}>
+                <div className="detail-label">{formatFieldLabel(key)}</div>
+                <div className="detail-value">{formatValue(key, value, before)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (action === 'UPDATE') {
+      const changes = getChangedFieldsList(before, after);
+      return (
+        <div style={{ marginBottom: '1rem' }}>
+          <div className="form-section-title">Attribute Modifications</div>
+          {changes.length > 0 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Property Name</th>
+                    <th>Previous State</th>
+                    <th>New State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {changes.map((c) => (
+                    <tr key={c.field}>
+                      <td style={{ fontWeight: 600 }}>{formatFieldLabel(c.field)}</td>
+                      <td style={{ color: 'var(--text-danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                        {formatValue(c.field, c.before, before)}
+                      </td>
+                      <td style={{ color: 'var(--text-success)', background: 'rgba(16, 185, 129, 0.05)', fontWeight: 600 }}>
+                        {formatValue(c.field, c.after, after)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              No visual record attributes were modified (metadata-only update).
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return null;
+  }
+
   return (
     <div>
-      <PageHeader title="Audit Log" description="Every create, update, delete, and transfer performed in the system." />
+      <PageHeader title="Audit Log" description="Every configuration change, operational event log, and deactivation is recorded here." />
 
       <div className="card">
-        <div className="toolbar">
-          <div className="field" style={{ minWidth: 160 }}>
+        {/* Balanced Grid Filter Layout */}
+        <div className="toolbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end', marginBottom: '1.25rem' }}>
+          <div className="field" style={{ margin: 0 }}>
             <label>Search</label>
             <input
               value={filters.search}
               onChange={(e) => handleFilterChange('search', e.target.value)}
-              placeholder="User, action, entity..."
+              placeholder="Username, reference, ID..."
             />
           </div>
-          <div className="field" style={{ minWidth: 120 }}>
+          <div className="field" style={{ margin: 0 }}>
             <label>Action</label>
             <select value={filters.action} onChange={(e) => handleFilterChange('action', e.target.value)}>
-              <option value="">All</option>
+              <option value="">All Actions</option>
               <option value="CREATE">CREATE</option>
               <option value="UPDATE">UPDATE</option>
               <option value="DELETE">DELETE</option>
               <option value="TRANSFER">TRANSFER</option>
+              <option value="AMEND_EVENT">AMEND_EVENT</option>
             </select>
           </div>
-          <div className="field" style={{ minWidth: 140 }}>
+          <div className="field" style={{ margin: 0 }}>
             <label>Entity Type</label>
             <select value={filters.entityType} onChange={(e) => handleFilterChange('entityType', e.target.value)}>
-              <option value="">All</option>
+              <option value="">All Entities</option>
               {Object.entries(ENTITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
-          <div className="field" style={{ minWidth: 120 }}>
+          <div className="field" style={{ margin: 0 }}>
             <label>User</label>
             <input
               value={filters.username}
               onChange={(e) => handleFilterChange('username', e.target.value)}
-              placeholder="Username"
+              placeholder="User name"
             />
           </div>
-          <div className="field">
-            <label>From</label>
+          <div className="field" style={{ margin: 0 }}>
+            <label>From Date</label>
             <input
               type="date"
               value={filters.from}
               onChange={(e) => handleFilterChange('from', e.target.value)}
             />
           </div>
-          <div className="field">
-            <label>To</label>
+          <div className="field" style={{ margin: 0 }}>
+            <label>To Date</label>
             <input
               type="date"
               value={filters.to}
               onChange={(e) => handleFilterChange('to', e.target.value)}
             />
           </div>
-          <div>
-            <button type="button" className="secondary" onClick={handleReset}>Reset</button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="secondary" onClick={handleReset} style={{ width: '100%', height: '38px', padding: '0 1rem' }}>Reset</button>
           </div>
         </div>
 
@@ -210,11 +467,12 @@ export default function AuditLogPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Date/Time</th>
-                    <th>User</th>
-                    <th>Action</th>
-                    <th>Entity Type</th>
-                    <th>Entity ID</th>
+                    <th style={{ width: '80px' }}>Log ID</th>
+                    <th style={{ width: '170px' }}>Date & Time</th>
+                    <th style={{ width: '110px' }}>User</th>
+                    <th style={{ width: '120px' }}>Action</th>
+                    <th style={{ width: '160px' }}>Entity</th>
+                    <th>Change Summary</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -224,15 +482,16 @@ export default function AuditLogPage() {
                       onClick={() => setViewEntry(log)}
                       style={{ cursor: 'pointer' }}
                     >
+                      <td style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>#{log.id}</td>
                       <td>{formatDate(log.created_at)}</td>
-                      <td>{log.username}</td>
+                      <td style={{ fontWeight: 500 }}>{log.username}</td>
                       <td>
                         <span className={`badge ${ACTION_BADGE[log.action] || ''}`}>
                           {log.action}
                         </span>
                       </td>
-                      <td>{humanizeEntity(log.entity_type)}</td>
-                      <td>{log.entity_id || '—'}</td>
+                      <td style={{ fontWeight: 600 }}>{log.entityLabel} <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.85rem' }}>{log.entityRef}</span></td>
+                      <td className="wrap" style={{ color: 'var(--text-secondary)' }}>{log.changeSummary}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -242,65 +501,31 @@ export default function AuditLogPage() {
               page={page}
               pageSize={pageSize}
               total={total}
-              onPageChange={loadLogs}
+              onPageChange={setPage}
             />
           </>
         )}
       </div>
 
       {viewEntry && (
-        <Modal title={`Audit Entry Details (#${viewEntry.id})`} onClose={() => setViewEntry(null)} width={800}>
-          <div className="detail-grid" style={{ marginBottom: '1.5rem' }}>
-            <div><div className="detail-label">Date / Time</div><div className="detail-value">{formatDate(viewEntry.created_at)}</div></div>
-            <div><div className="detail-label">User</div><div className="detail-value">{viewEntry.username} (ID: {viewEntry.user_id || 'system'})</div></div>
+        <Modal title={`Audit Entry Details (#${viewEntry.id})`} onClose={() => setViewEntry(null)} width={700}>
+          {/* Metadata Section */}
+          <div className="form-section-title">Audit Metadata</div>
+          <div className="detail-grid" style={{ marginBottom: '1.25rem', gap: '0.75rem 1.5rem' }}>
+            <div><div className="detail-label">Date & Time</div><div className="detail-value">{formatDate(viewEntry.created_at)}</div></div>
+            <div><div className="detail-label">Performed By</div><div className="detail-value">{viewEntry.username} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· ID {viewEntry.user_id || 'system'}</span></div></div>
             <div><div className="detail-label">Action</div><div className="detail-value"><span className={`badge ${ACTION_BADGE[viewEntry.action] || ''}`}>{viewEntry.action}</span></div></div>
-            <div><div className="detail-label">Entity Type</div><div className="detail-value">{humanizeEntity(viewEntry.entity_type)}</div></div>
-            <div><div className="detail-label">Entity ID</div><div className="detail-value">{viewEntry.entity_id || '—'}</div></div>
+            <div><div className="detail-label">Entity Category</div><div className="detail-value">{viewEntry.entityLabel}</div></div>
+            <div><div className="detail-label">Entity ID / Reference</div><div className="detail-value">{viewEntry.entityRef} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· ID {viewEntry.entity_id || '—'}</span></div></div>
           </div>
 
-          {viewEntry.action === 'UPDATE' && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h4 style={{ margin: '0 0 0.5rem 0' }}>Changed Fields</h4>
-              {getChangedFields(viewEntry.before_json, viewEntry.after_json).length > 0 ? (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Field Name</th>
-                        <th>State Before</th>
-                        <th>State After</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {getChangedFields(viewEntry.before_json, viewEntry.after_json).map((c) => (
-                        <tr key={c.field}>
-                          <td style={{ fontWeight: 600 }}>{c.field}</td>
-                          <td style={{ color: 'var(--danger)', textDecoration: 'line-through' }}>{c.before}</td>
-                          <td style={{ color: 'var(--success)', fontWeight: 600 }}>{c.after}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>No record attribute modifications detected.</p>
-              )}
-            </div>
-          )}
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '1rem 0 1.25rem 0' }} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', fontSize: '0.8rem' }}>
-            <div>
-              <h4 style={{ margin: '0 0 0.5rem 0' }}>Before State</h4>
-              <pre style={{ background: 'var(--surface-muted)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', overflowX: 'auto', maxHeight: '250px' }}>
-                {viewEntry.before_json ? JSON.stringify(JSON.parse(viewEntry.before_json), null, 2) : '—'}
-              </pre>
-            </div>
-            <div>
-              <h4 style={{ margin: '0 0 0.5rem 0' }}>After State</h4>
-              <pre style={{ background: 'var(--surface-muted)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', overflowX: 'auto', maxHeight: '250px' }}>
-                {viewEntry.after_json ? JSON.stringify(JSON.parse(viewEntry.after_json), null, 2) : '—'}
-              </pre>
-            </div>
+          {/* Conditional Change Details rendering */}
+          {renderModalDetails(viewEntry)}
+
+          <div className="form-actions" style={{ marginTop: '1.5rem' }}>
+            <button type="button" className="secondary" onClick={() => setViewEntry(null)}>Close</button>
           </div>
         </Modal>
       )}
