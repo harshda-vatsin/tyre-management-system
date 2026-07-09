@@ -43,7 +43,7 @@ router.get('/', (req, res) => {
       SELECT current_depot_id, COUNT(*) AS total_tyre_count FROM tyres GROUP BY current_depot_id
     ) tyre_counts ON tyre_counts.current_depot_id = d.id
     ${where}
-    ORDER BY d.name
+    ORDER BY d.is_active DESC, d.name
   `).all(params);
 
   res.json(depots);
