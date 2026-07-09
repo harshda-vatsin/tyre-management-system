@@ -27,11 +27,11 @@ export const EVENT_TYPE_MAP = {
 };
 
 export const ACTION_LABELS = {
-  CREATE: 'CREATE',
-  UPDATE: 'UPDATE',
-  DELETE: 'DELETE',
-  TRANSFER: 'TRANSFER',
-  AMEND_EVENT: 'AMEND_EVENT',
+  CREATE: 'Created',
+  UPDATE: 'Updated',
+  DELETE: 'Deactivated',
+  TRANSFER: 'Transferred',
+  AMEND_EVENT: 'Event Amended',
 };
 
 export const FIELD_LABELS = {

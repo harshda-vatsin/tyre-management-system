@@ -15,18 +15,17 @@ import {
   formatValue,
   humanizeEventType,
   humanizePosition,
+  ACTION_LABELS,
 } from '../../../lib/auditFormatter.js';
 
 const ENTITY_LABELS = {
   tyre: 'Tyre',
-  tyre_event: 'Tyre Event',
-  user: 'User',
-  alert: 'Alert',
-  threshold: 'Threshold',
-  depot: 'Depot',
-  bus_model: 'Bus Model',
   bus: 'Bus',
-  system_setting: 'System Setting',
+  depot: 'Depot',
+  tyre_event: 'Tyre event',
+  threshold: 'Threshold',
+  user: 'User',
+  system_setting: 'System setting',
 };
 
 const ACTION_BADGE = {
@@ -90,8 +89,6 @@ export default function AuditLogPage() {
       if (filters.to) params.set('to', filters.to);
 
       const res = await api.get(`/audit?${params.toString()}`);
-      
-      // Enriched logs using formatting utility
       const formattedRows = (res.data || []).map(formatAuditEntry);
       
       setLogs(formattedRows);
@@ -151,16 +148,15 @@ export default function AuditLogPage() {
     );
   }
 
-  // Render modal layout depending on entity type and action type
   function renderModalDetails(log) {
     const { action, entity_type, before, after } = log;
 
-    // Check if it is a threshold modification
+    // Threshold modification
     if (entity_type === 'threshold') {
       const isOverride = (after?.scope_type || before?.scope_type) === 'DEPOT';
       return (
         <div style={{ marginBottom: '1rem' }}>
-          <div className="form-section-title">Threshold Change Details</div>
+          <div className="form-section-title">Threshold Adjustment Details</div>
           <div className="detail-grid" style={{ gap: '1rem 1.5rem' }}>
             <div><div className="detail-label">Threshold Parameter</div><div className="detail-value">{after?.parameter_type || before?.parameter_type}</div></div>
             <div><div className="detail-label">Scope</div><div className="detail-value">{isOverride ? 'Depot Override' : 'Global'}</div></div>
@@ -277,7 +273,7 @@ export default function AuditLogPage() {
       const originalVals = before || {};
       return (
         <div style={{ marginBottom: '1.5rem' }}>
-          <div className="form-section-title">Event Amendment Details</div>
+          <div className="form-section-title">Event Correction Details</div>
           <div style={{ marginBottom: '1rem' }}>
             <div className="detail-label">Reason for Amendment</div>
             <div className="detail-value" style={{ padding: '0.5rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--primary)', fontStyle: 'italic' }}>
@@ -312,13 +308,12 @@ export default function AuditLogPage() {
 
     if (action === 'CREATE') {
       const fields = Object.entries(after || {}).filter(([key, val]) => {
-        // filter out internal technical keys
         return !['id', 'created_at', 'updated_at', 'updated_by', 'before_json', 'after_json'].includes(key) && val !== null && val !== undefined && val !== '';
       });
 
       return (
         <div style={{ marginBottom: '1rem' }}>
-          <div className="form-section-title">Created Record Parameters</div>
+          <div className="form-section-title">Created Item Details</div>
           <div className="detail-grid" style={{ gap: '0.85rem 1.5rem' }}>
             {fields.map(([key, value]) => (
               <div key={key}>
@@ -338,7 +333,7 @@ export default function AuditLogPage() {
 
       return (
         <div style={{ marginBottom: '1rem' }}>
-          <div className="form-section-title">Deleted Record Attributes</div>
+          <div className="form-section-title">Deactivated Item Details</div>
           <div className="detail-grid" style={{ gap: '0.85rem 1.5rem' }}>
             {fields.map(([key, value]) => (
               <div key={key}>
@@ -355,7 +350,7 @@ export default function AuditLogPage() {
       const changes = getChangedFieldsList(before, after);
       return (
         <div style={{ marginBottom: '1rem' }}>
-          <div className="form-section-title">Attribute Modifications</div>
+          <div className="form-section-title">Modified Properties</div>
           {changes.length > 0 ? (
             <div className="table-wrap">
               <table>
@@ -398,60 +393,74 @@ export default function AuditLogPage() {
       <PageHeader title="Audit Log" description="Every configuration change, operational event log, and deactivation is recorded here." />
 
       <div className="card">
-        {/* Balanced Grid Filter Layout */}
-        <div className="toolbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end', marginBottom: '1.25rem' }}>
+        {/* Redesigned Balanced Grid Filter Layout using plain operational terminology */}
+        <div className="toolbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', alignItems: 'end', marginBottom: '1.25rem' }}>
+          
           <div className="field" style={{ margin: 0 }}>
-            <label>Search</label>
+            <label>Find an activity</label>
             <input
               value={filters.search}
               onChange={(e) => handleFilterChange('search', e.target.value)}
-              placeholder="Username, reference, ID..."
+              placeholder="Search by tyre number, bus number, depot or person"
             />
           </div>
+
           <div className="field" style={{ margin: 0 }}>
-            <label>Action</label>
+            <label>What happened?</label>
             <select value={filters.action} onChange={(e) => handleFilterChange('action', e.target.value)}>
-              <option value="">All Actions</option>
-              <option value="CREATE">CREATE</option>
-              <option value="UPDATE">UPDATE</option>
-              <option value="DELETE">DELETE</option>
-              <option value="TRANSFER">TRANSFER</option>
-              <option value="AMEND_EVENT">AMEND_EVENT</option>
+              <option value="">All activities</option>
+              <option value="CREATE">Created</option>
+              <option value="UPDATE">Updated</option>
+              <option value="DELETE">Deactivated</option>
+              <option value="TRANSFER">Transferred</option>
+              <option value="AMEND_EVENT">Event amended</option>
             </select>
           </div>
+
           <div className="field" style={{ margin: 0 }}>
-            <label>Entity Type</label>
+            <label>What was changed?</label>
             <select value={filters.entityType} onChange={(e) => handleFilterChange('entityType', e.target.value)}>
-              <option value="">All Entities</option>
+              <option value="">Everything</option>
               {Object.entries(ENTITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
+
           <div className="field" style={{ margin: 0 }}>
-            <label>User</label>
+            <label>Person who made the change</label>
             <input
               value={filters.username}
               onChange={(e) => handleFilterChange('username', e.target.value)}
-              placeholder="User name"
+              placeholder="Search by name or username"
             />
           </div>
-          <div className="field" style={{ margin: 0 }}>
-            <label>From Date</label>
-            <input
-              type="date"
-              value={filters.from}
-              onChange={(e) => handleFilterChange('from', e.target.value)}
-            />
+
+          {/* Date range visual grouping */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Date range</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div className="field" style={{ margin: 0, flex: 1 }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>From</label>
+                <input
+                  type="date"
+                  value={filters.from}
+                  onChange={(e) => handleFilterChange('from', e.target.value)}
+                  style={{ height: '38px', padding: '0.25rem 0.5rem' }}
+                />
+              </div>
+              <div className="field" style={{ margin: 0, flex: 1 }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>To</label>
+                <input
+                  type="date"
+                  value={filters.to}
+                  onChange={(e) => handleFilterChange('to', e.target.value)}
+                  style={{ height: '38px', padding: '0.25rem 0.5rem' }}
+                />
+              </div>
+            </div>
           </div>
-          <div className="field" style={{ margin: 0 }}>
-            <label>To Date</label>
-            <input
-              type="date"
-              value={filters.to}
-              onChange={(e) => handleFilterChange('to', e.target.value)}
-            />
-          </div>
+
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button type="button" className="secondary" onClick={handleReset} style={{ width: '100%', height: '38px', padding: '0 1rem' }}>Reset</button>
+            <button type="button" className="secondary" onClick={handleReset} style={{ width: '100%', height: '38px', padding: '0 1rem' }}>Clear filters</button>
           </div>
         </div>
 
@@ -469,9 +478,9 @@ export default function AuditLogPage() {
                   <tr>
                     <th style={{ width: '80px' }}>Log ID</th>
                     <th style={{ width: '170px' }}>Date & Time</th>
-                    <th style={{ width: '110px' }}>User</th>
-                    <th style={{ width: '120px' }}>Action</th>
-                    <th style={{ width: '160px' }}>Entity</th>
+                    <th style={{ width: '150px' }}>Person</th>
+                    <th style={{ width: '120px' }}>Activity</th>
+                    <th style={{ width: '180px' }}>What was changed</th>
                     <th>Change Summary</th>
                   </tr>
                 </thead>
@@ -487,7 +496,7 @@ export default function AuditLogPage() {
                       <td style={{ fontWeight: 500 }}>{log.username}</td>
                       <td>
                         <span className={`badge ${ACTION_BADGE[log.action] || ''}`}>
-                          {log.action}
+                          {ACTION_LABELS[log.action] || log.action}
                         </span>
                       </td>
                       <td style={{ fontWeight: 600 }}>{log.entityLabel} <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.85rem' }}>{log.entityRef}</span></td>
@@ -508,15 +517,15 @@ export default function AuditLogPage() {
       </div>
 
       {viewEntry && (
-        <Modal title={`Audit Entry Details (#${viewEntry.id})`} onClose={() => setViewEntry(null)} width={700}>
+        <Modal title={`Activity Details (#${viewEntry.id})`} onClose={() => setViewEntry(null)} width={700}>
           {/* Metadata Section */}
-          <div className="form-section-title">Audit Metadata</div>
+          <div className="form-section-title">Activity Metadata</div>
           <div className="detail-grid" style={{ marginBottom: '1.25rem', gap: '0.75rem 1.5rem' }}>
             <div><div className="detail-label">Date & Time</div><div className="detail-value">{formatDate(viewEntry.created_at)}</div></div>
-            <div><div className="detail-label">Performed By</div><div className="detail-value">{viewEntry.username} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· ID {viewEntry.user_id || 'system'}</span></div></div>
-            <div><div className="detail-label">Action</div><div className="detail-value"><span className={`badge ${ACTION_BADGE[viewEntry.action] || ''}`}>{viewEntry.action}</span></div></div>
-            <div><div className="detail-label">Entity Category</div><div className="detail-value">{viewEntry.entityLabel}</div></div>
-            <div><div className="detail-label">Entity ID / Reference</div><div className="detail-value">{viewEntry.entityRef} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· ID {viewEntry.entity_id || '—'}</span></div></div>
+            <div><div className="detail-label">Person who made the change</div><div className="detail-value">{viewEntry.username} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· User ID {viewEntry.user_id || 'system'}</span></div></div>
+            <div><div className="detail-label">Activity</div><div className="detail-value"><span className={`badge ${ACTION_BADGE[viewEntry.action] || ''}`}>{ACTION_LABELS[viewEntry.action] || viewEntry.action}</span></div></div>
+            <div><div className="detail-label">Changed item type</div><div className="detail-value">{viewEntry.entityLabel}</div></div>
+            <div><div className="detail-label">Changed item reference</div><div className="detail-value">{viewEntry.entityRef} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· Item ID {viewEntry.entity_id || '—'}</span></div></div>
           </div>
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '1rem 0 1.25rem 0' }} />
