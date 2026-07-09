@@ -1552,7 +1552,7 @@ a.bus-diagram-tyre {
   display: block;
 }
 .mobile-only {
-  display: none;
+  display: none !important;
 }
 
 /* Ensure contained table scroll wrapper doesn't push the viewport */
