@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from './AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
+import NotificationBell from './NotificationBell.jsx';
 import { ROLES } from '../lib/roles.js';
 
 const EVENT_LOGGING_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR];
@@ -155,6 +156,7 @@ export default function Layout({ children }) {
             <span>{user?.role}</span>
           </span>
         </button>
+        <NotificationBell />
         <ThemeToggle />
       </div>
     </>
@@ -167,7 +169,8 @@ export default function Layout({ children }) {
           <Menu size={20} />
         </button>
         <strong>EBTMS</strong>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <NotificationBell />
           <ThemeToggle />
         </div>
       </div>
