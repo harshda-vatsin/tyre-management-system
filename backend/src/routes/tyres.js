@@ -283,4 +283,8 @@ router.get('/:id/export-pdf', async (req, res) => {
   }
 });
 
+// Exported for reuse by the CSV Bulk Import workflow (utils/bulkImport.js),
+// which needs the identical position/depot validation for each imported row.
+router.validatePosition = validatePosition;
+
 module.exports = router;

@@ -8,6 +8,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const db = require('./db');
 
 // Import route modules for each entity and resource area
 const authRoutes = require('./routes/auth');
@@ -24,9 +25,21 @@ const auditRoutes = require('./routes/audit');
 const reportRoutes = require('./routes/reports');
 const dashboardRoutes = require('./routes/dashboard');
 const settingsRoutes = require('./routes/settings');
+const importRoutes = require('./routes/imports');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+// Nginx is the only public entry point; the backend only needs to be
+// reachable from Nginx on the same VM, so bind to loopback by default.
+// Override with HOST=0.0.0.0 only if something outside the VM needs direct
+// access (not required by the intended architecture).
+const HOST = process.env.HOST || '127.0.0.1';
+
+if (!process.env.JWT_SECRET) {
+  // Not fatal -- the dev fallback in middleware/auth.js still works -- but
+  // every token would be signed with a publicly-known secret in production.
+  console.warn('[EBTMS] JWT_SECRET is not set. Using the insecure development default is unsafe in production.');
+}
 
 // Enable Cross-Origin Resource Sharing (CORS) for frontend-backend integration
 app.use(cors());
@@ -51,6 +64,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/imports', importRoutes);
 
 // Fallback middleware to handle unmatched routes with a 404 response
 app.use((req, res) => {
@@ -65,6 +79,30 @@ app.use((err, req, res, next) => {
 });
 
 // Begin listening for incoming HTTP requests on the specified port
-app.listen(PORT, () => {
-  console.log(`EBTMS backend listening on http://localhost:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`EBTMS backend listening on http://${HOST}:${PORT}`);
+});
+
+// better-sqlite3 is synchronous and holds the DB file open for the life of
+// the process; under PM2, SIGTERM is sent on every restart/reload/stop, so
+// closing the HTTP server and the DB handle here avoids leaving in-flight
+// requests or WAL checkpoints truncated mid-write.
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  server.close(() => {
+    db.close();
+    process.exit(0);
+  });
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Log and keep the process alive on non-fatal async errors instead of
+// letting Node crash the whole backend for one bad promise chain; PM2 would
+// otherwise restart-loop on errors that don't actually require a restart.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
 });

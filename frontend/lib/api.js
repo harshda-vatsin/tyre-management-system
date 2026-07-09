@@ -102,6 +102,40 @@ export const api = {
 };
 
 /**
+ * Uploads a file (e.g. a CSV Bulk Import) as multipart/form-data. Deliberately
+ * skips the JSON Content-Type/body-serialization request() uses -- the
+ * browser sets its own multipart boundary header when given a FormData body.
+ *
+ * @param {string} path - Target API segment
+ * @param {File} file - File selected by the user
+ * @returns {Promise<any>} Parsed JSON response
+ */
+export async function uploadFile(path, file) {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await res.json() : await res.text();
+
+  if (!res.ok) {
+    const message = (data && data.error) || res.statusText || 'Upload failed';
+    const error = new Error(message);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
+
+/**
  * Handles binary report file downloads (PDF and Excel formats).
  * 
  * @param {string} path - Target API segment

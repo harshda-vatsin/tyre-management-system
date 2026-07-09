@@ -36,7 +36,9 @@ ebtms/
     components/      AuthContext, Layout, ProtectedRoute, Providers,
                       Pagination, FilterBar, Modal, TyreSelect
     lib/             api.js (fetch wrapper with JWT attached), roles.js
-    next.config.js    rewrites /api/* to the Express server
+    next.config.js    dev-mode rewrite of /api/* to the Express server
+                      (production traffic never hits this -- Nginx proxies
+                      /api/* straight to the backend, see deploy/nginx.conf)
 ```
 
 ## Setup
@@ -44,13 +46,13 @@ ebtms/
 ```bash
 # Backend
 cd ebtms/backend
-npm install
+npm ci
 npm run seed     # wipes and reseeds all tables with demo data
 npm start        # http://localhost:4000
 
 # Frontend (separate terminal)
 cd ebtms/frontend
-npm install
+npm ci
 npm run dev       # http://localhost:3000
 ```
 
@@ -135,3 +137,80 @@ reports.
 
 See the requirement traceability matrix in project history for the
 full FR-to-file mapping.
+
+## Production Deployment (Linux VM, no Docker)
+
+Architecture: `Browser → Nginx → Next.js (PM2, :3000)` and
+`Browser → Nginx /api → Express (PM2, :4000) → SQLite`. Nginx is the only
+public entry point; both Node processes bind to `127.0.0.1` and are never
+exposed directly. See `deploy/nginx.conf` and `ecosystem.config.js` at the
+repo root.
+
+```bash
+# 1. System prerequisites (Node 18.17+, matches Next.js 14's requirement)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs nginx build-essential python3
+sudo npm ci -g pm2
+
+# 2. Get the code
+git clone <your-repo-url> ebtms
+cd ebtms
+
+# 3. Backend
+cd backend
+npm ci
+cp .env.example .env
+# edit .env: set a real JWT_SECRET (openssl rand -hex 32), leave PORT/HOST
+npm run seed        # first deploy only -- wipes all tables, seeds demo data
+cd ..
+
+# 4. Frontend
+cd frontend
+npm ci
+cp .env.example .env   # defaults are correct for same-VM deployment
+npm run build
+cd ..
+
+# 5. Start both under PM2
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup          # run the command it prints (systemd service, survives reboot)
+
+# 6. Nginx
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/ebtms
+sudo sed -i 's/YOUR_DOMAIN_OR_VM_IP/<your-domain-or-ip>/' /etc/nginx/sites-available/ebtms
+sudo ln -s /etc/nginx/sites-available/ebtms /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default   # avoid a default-site conflict
+sudo nginx -t
+sudo systemctl reload nginx
+
+# 7. Health check
+curl -I http://localhost/            # expect 200 from Next.js
+curl -s http://localhost/api/health  # expect {"status":"ok"}
+```
+
+`backend/data/` (SQLite file + WAL) must exist and be writable by the OS
+user running PM2 -- `db.js` creates it automatically on first run, but
+confirm ownership if PM2 runs as a dedicated service user rather than the
+account that cloned the repo.
+
+`npm run seed` is destructive (`DELETE FROM` on every table) -- run it once
+against a fresh database, never again against one with real data.
+
+### HTTPS and the QR scanner
+
+The config above is HTTP-only. Everything works except the `/scan` page's
+camera: browsers only allow `getUserMedia` (camera access) in a secure
+context -- HTTPS, or `localhost`. Over plain HTTP on a domain or IP, `/scan`
+does not crash -- it catches the camera failure and falls back to its
+built-in manual tyre-number lookup -- but the actual QR scan will not start.
+
+To enable it, point a domain at the VM and add HTTPS:
+
+```bash
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d yourdomain.com
+```
+
+Let's Encrypt cannot issue a certificate for a bare IP address, so a domain
+is required for this step.

@@ -7,7 +7,9 @@
 const express = require('express');
 const db = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { createTyreEvent, ApiError } = require('../utils/tyreEvents');
+const { createTyreEvent, ApiError, AMENDABLE_FIELDS } = require('../utils/tyreEvents');
+const { validateNsd, validatePressure } = require('../utils/readingValidation');
+const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
 
 const router = express.Router();
@@ -15,6 +17,17 @@ const router = express.Router();
 // SRS section 6: NFM and Read-Only Auditor never log events (no write role
 // exists for them anywhere in the spec) -- they are read-only on this resource.
 const WRITE_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR];
+
+// Tyre Card Amendment / Correction workflow: only Depot Managers and System
+// Administrators may amend a tyre_events row (via a tyre_event_amendments
+// overlay row -- the original event itself is never touched, see FR-TC-02).
+const AMEND_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER];
+
+const SELECT_AMENDMENT = `
+  SELECT a.*, u.username AS amended_by_username, u.full_name AS amended_by_name
+  FROM tyre_event_amendments a
+  LEFT JOIN users u ON u.id = a.amended_by
+`;
 
 function handleEventError(err, res) {
   if (err instanceof ApiError) {
@@ -155,6 +168,101 @@ router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
 
   // Returns 201 if at least one event was successfully logged, otherwise returns 400
   res.status(created.length ? 201 : 400).json({ created, errors });
+});
+
+// Validates and coerces the corrected_values submitted to an amendment,
+// restricted to the field set that's amendable for the original event's
+// event_type (see AMENDABLE_FIELDS) so a correction can't smuggle in changes
+// to structural/relational fields the tyre_events table relies on.
+function cleanCorrectedValues(eventType, correctedValues) {
+  const allowedFields = AMENDABLE_FIELDS[eventType] || [];
+  const cleaned = {};
+  for (const [key, value] of Object.entries(correctedValues)) {
+    if (!allowedFields.includes(key)) {
+      throw new ApiError(400, `Field "${key}" is not amendable for ${eventType} events`);
+    }
+    if (key === 'nsd_value') {
+      const result = validateNsd(value);
+      if (!result.valid) throw new ApiError(400, result.error);
+      cleaned[key] = result.value;
+    } else if (key === 'pressure_value') {
+      const result = validatePressure(value);
+      if (!result.valid) throw new ApiError(400, result.error);
+      cleaned[key] = result.value;
+    } else if (key === 'repair_type') {
+      if (!['plug', 'patch', 'tube'].includes(value)) {
+        throw new ApiError(400, 'repair_type must be one of: plug, patch, tube');
+      }
+      cleaned[key] = value;
+    } else {
+      if (value === undefined || value === null || String(value).trim() === '') {
+        throw new ApiError(400, `${key} cannot be empty`);
+      }
+      cleaned[key] = value;
+    }
+  }
+  if (Object.keys(cleaned).length === 0) {
+    throw new ApiError(400, 'At least one corrected value is required');
+  }
+  return cleaned;
+}
+
+// Tyre Card Amendment / Correction: layers a correction on top of an existing
+// tyre_events row without ever updating or deleting it (FR-TC-02/NFR-07).
+router.post('/:id/correct', authorize(...AMEND_ROLES), (req, res) => {
+  const event = db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: 'Event not found' });
+  if (isDepotScoped(req.user) && event.depot_id !== req.user.depot_id) {
+    return res.status(403).json({ error: 'Not authorized for this depot' });
+  }
+
+  const { reason, corrected_values } = req.body || {};
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'An amendment reason is required' });
+  }
+  if (!corrected_values || typeof corrected_values !== 'object' || Array.isArray(corrected_values)) {
+    return res.status(400).json({ error: 'corrected_values is required' });
+  }
+
+  let cleaned;
+  try {
+    cleaned = cleanCorrectedValues(event.event_type, corrected_values);
+  } catch (err) {
+    return handleEventError(err, res);
+  }
+
+  const info = db.prepare(`
+    INSERT INTO tyre_event_amendments (original_event_id, corrected_values_json, reason, amended_by)
+    VALUES (?, ?, ?, ?)
+  `).run(event.id, JSON.stringify(cleaned), reason, req.user.id);
+
+  const amendment = db.prepare(`${SELECT_AMENDMENT} WHERE a.id = ?`).get(info.lastInsertRowid);
+
+  writeAuditLog({
+    user: req.user,
+    action: 'AMEND_EVENT',
+    entityType: 'tyre_event',
+    entityId: event.id,
+    before: event,
+    after: { amendment_id: amendment.id, corrected_values: cleaned, reason },
+  });
+
+  res.status(201).json(amendment);
+});
+
+// Full amendment history for one tyre_events row, oldest first (newest last)
+// so the UI can render Original -> Correction #1 -> Correction #2 -> ...
+router.get('/:id/amendments', (req, res) => {
+  const event = db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: 'Event not found' });
+  if (isDepotScoped(req.user) && event.depot_id !== req.user.depot_id) {
+    return res.status(403).json({ error: 'Not authorized for this depot' });
+  }
+
+  const rows = db
+    .prepare(`${SELECT_AMENDMENT} WHERE a.original_event_id = ? ORDER BY a.amended_at ASC, a.id ASC`)
+    .all(event.id);
+  res.json(rows);
 });
 
 module.exports = router;

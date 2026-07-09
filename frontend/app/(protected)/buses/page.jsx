@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Plus, Bus as BusIcon } from 'lucide-react';
+import { Plus, Bus as BusIcon, UploadCloud } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
@@ -16,6 +16,17 @@ import LoadingState from '../../../components/LoadingState.jsx';
 import FilterBar from '../../../components/FilterBar.jsx';
 import Pagination from '../../../components/Pagination.jsx';
 import BusModelFields, { emptyBusModelForm } from '../../../components/BusModelFields.jsx';
+import CsvImportModal from '../../../components/CsvImportModal.jsx';
+
+const IMPORT_COLUMNS = [
+  { key: 'registration_no', required: true, example: 'DL01AB1234' },
+  { key: 'chassis_no', required: true, example: 'VIN123456789' },
+  { key: 'bus_model_id', required: true, example: '1' },
+  { key: 'depot_id', required: true, example: '2' },
+  { key: 'year_of_manufacture', required: true, example: '2024' },
+  { key: 'date_of_entry_into_fleet', required: true, example: '2024-05-10' },
+  { key: 'status', example: 'Active' },
+];
 
 const STATUS_OPTIONS = ['Active', 'Under Maintenance', 'Decommissioned'];
 const STATUS_BADGE = { Active: 'badge-success', 'Under Maintenance': 'badge-warning', Decommissioned: 'badge-critical' };
@@ -57,6 +68,7 @@ export default function BusesPage() {
   const [editingId, setEditingId] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   // "Other — Add New Model" quick-create popup, triggered from the Model /
   // Make select. Reuses the same BusModelFields component and /bus-models
@@ -202,7 +214,12 @@ export default function BusesPage() {
       <PageHeader
         title="Buses"
         description="Fleet vehicle master data — model, depot assignment, and operating status."
-        actions={canWrite && <button onClick={startCreate}><Plus size={15} /> Add Bus</button>}
+        actions={canWrite && (
+          <>
+            <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
+            <button onClick={startCreate}><Plus size={15} /> Add Bus</button>
+          </>
+        )}
       />
 
       <div className="card">
@@ -368,6 +385,16 @@ export default function BusesPage() {
           confirmLabel="Delete"
           onConfirm={handleDelete}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {importOpen && (
+        <CsvImportModal
+          entity="buses"
+          title="Import Buses from CSV"
+          columns={IMPORT_COLUMNS}
+          onClose={() => setImportOpen(false)}
+          onImported={load}
         />
       )}
 

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Plus, CircleDot } from 'lucide-react';
+import { Plus, CircleDot, UploadCloud } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
@@ -14,6 +14,20 @@ import EmptyState from '../../../components/EmptyState.jsx';
 import LoadingState from '../../../components/LoadingState.jsx';
 import FilterBar from '../../../components/FilterBar.jsx';
 import Pagination from '../../../components/Pagination.jsx';
+import CsvImportModal from '../../../components/CsvImportModal.jsx';
+
+const IMPORT_COLUMNS = [
+  { key: 'tyre_number', required: true, example: 'TY001' },
+  { key: 'brand', required: true, example: 'MRF' },
+  { key: 'model', example: 'ZTX' },
+  { key: 'size', example: '295/80R22.5' },
+  { key: 'purchase_date', example: '2025-01-15' },
+  { key: 'initial_nsd', example: '18' },
+  { key: 'status', example: 'In Store' },
+  { key: 'current_bus_id', example: '' },
+  { key: 'current_position', example: '' },
+  { key: 'current_depot_id', example: '2' },
+];
 
 const STATUS_OPTIONS = ['In Service', 'In Store', 'Condemned', 'Under Repair'];
 const STATUS_BADGE = { 'In Service': 'badge-success', 'In Store': 'badge-info', Condemned: 'badge-critical', 'Under Repair': 'badge-warning' };
@@ -47,6 +61,7 @@ export default function TyresPage() {
   const [editingId, setEditingId] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   async function loadLookups() {
     const [d, b] = await Promise.all([api.get('/depots'), api.get('/buses?pageSize=100')]);
@@ -156,7 +171,12 @@ export default function TyresPage() {
       <PageHeader
         title="Tyres"
         description="Tyre master data — brand, size, status, and current mount."
-        actions={canWrite && <button onClick={startCreate}><Plus size={15} /> Add Tyre</button>}
+        actions={canWrite && (
+          <>
+            <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
+            <button onClick={startCreate}><Plus size={15} /> Add Tyre</button>
+          </>
+        )}
       />
 
       <div className="card">
@@ -287,6 +307,16 @@ export default function TyresPage() {
             {error && <div className="error-text">{error}</div>}
           </form>
         </Drawer>
+      )}
+
+      {importOpen && (
+        <CsvImportModal
+          entity="tyres"
+          title="Import Tyres from CSV"
+          columns={IMPORT_COLUMNS}
+          onClose={() => setImportOpen(false)}
+          onImported={load}
+        />
       )}
 
       {deleteTarget && (

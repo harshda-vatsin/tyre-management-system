@@ -7,11 +7,18 @@
  * thresholds, alerts, and audit_log).
  */
 
+const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
 // Resolve the absolute file path to the SQLite storage file
-const DB_PATH = path.join(__dirname, '..', 'data', 'ebtms.sqlite');
+const DB_DIR = path.join(__dirname, '..', 'data');
+const DB_PATH = path.join(DB_DIR, 'ebtms.sqlite');
+
+// backend/data/ holds only gitignored *.sqlite* files, so a fresh clone has
+// no such directory on disk -- better-sqlite3 cannot create the DB file
+// inside a missing directory, so ensure it exists first.
+fs.mkdirSync(DB_DIR, { recursive: true });
 
 // Open the connection to the SQLite database
 const db = new Database(DB_PATH);
@@ -145,6 +152,21 @@ db.exec(`
   --   PRESSURE            -> GLOBAL | BUS_MODEL
   --   INSPECTION_INTERVAL -> GLOBAL only
   --   ESCALATION_DAYS     -> GLOBAL only
+  -- Tyre Card Amendment / Correction workflow. tyre_events rows are never
+  -- updated or deleted (NFR-07) -- a correction is instead layered on top as
+  -- its own append-only row here, so the original event and every past
+  -- correction remain in the audit trail. corrected_values_json only holds
+  -- the fields the user actually changed (a sparse patch), not a full copy
+  -- of the event.
+  CREATE TABLE IF NOT EXISTS tyre_event_amendments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_event_id INTEGER NOT NULL REFERENCES tyre_events(id),
+    corrected_values_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    amended_by INTEGER REFERENCES users(id),
+    amended_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS thresholds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     parameter_type TEXT NOT NULL CHECK (parameter_type IN ('NSD', 'PRESSURE', 'INSPECTION_INTERVAL', 'ESCALATION_DAYS')),
@@ -223,6 +245,7 @@ db.exec(`
   -- integrity backstop, not the primary enforcement mechanism.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_active_unique ON alerts(tyre_id, parameter_type) WHERE status IN ('Open', 'Acknowledged');
   CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS idx_tyre_event_amendments_event ON tyre_event_amendments(original_event_id, amended_at);
   CREATE INDEX IF NOT EXISTS idx_users_depot ON users(depot_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_thresholds_scope ON thresholds(parameter_type, scope_type, scope_id) WHERE is_active = 1;
 `);
@@ -248,6 +271,31 @@ if (busModelColumns.includes('axle_layout_json')) {
 }
 if (busModelColumns.includes('axle_configuration')) {
   db.exec('ALTER TABLE bus_models DROP COLUMN axle_configuration');
+}
+
+// Tyre Card Amendment workflow needs a new AMEND_EVENT audit action. SQLite
+// has no ALTER TABLE support for changing a CHECK constraint in place, so an
+// audit_log table predating this migration is rebuilt column-for-column
+// under its existing name, preserving every row already written to it.
+const auditLogTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").get();
+if (auditLogTable && !auditLogTable.sql.includes('AMEND_EVENT')) {
+  db.exec(`
+    ALTER TABLE audit_log RENAME TO audit_log_old;
+    CREATE TABLE audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id),
+      username TEXT,
+      action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER', 'AMEND_EVENT')),
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      before_json TEXT,
+      after_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO audit_log SELECT * FROM audit_log_old;
+    DROP TABLE audit_log_old;
+    CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+  `);
 }
 
 // Export the initialized connection database object for usage in the application

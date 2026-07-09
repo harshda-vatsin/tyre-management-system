@@ -297,4 +297,11 @@ router.delete('/:id', authorize(ROLES.ADMIN), (req, res) => {
   res.status(204).send();
 });
 
+// Exported for reuse by the CSV Bulk Import workflow (utils/bulkImport.js),
+// which needs the identical code-normalization and field validation for each
+// imported row.
+router.normalizeCode = normalizeCode;
+router.validateYearOfManufacture = validateYearOfManufacture;
+router.validateDateOfEntry = validateDateOfEntry;
+
 module.exports = router;

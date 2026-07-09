@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Plus, Warehouse } from 'lucide-react';
+import { Plus, Warehouse, UploadCloud } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import { ROLES } from '../../../lib/roles.js';
@@ -12,9 +12,16 @@ import ConfirmDialog from '../../../components/ConfirmDialog.jsx';
 import EmptyState from '../../../components/EmptyState.jsx';
 import LoadingState from '../../../components/LoadingState.jsx';
 import FilterBar from '../../../components/FilterBar.jsx';
+import CsvImportModal from '../../../components/CsvImportModal.jsx';
 
 const EMPTY_FORM = { name: '', code: '', region: '', address: '' };
 const STATUS_OPTIONS = [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Inactive' }];
+const IMPORT_COLUMNS = [
+  { key: 'name', required: true, example: 'Central Depot' },
+  { key: 'code', required: true, example: 'DEP01' },
+  { key: 'region', example: 'North' },
+  { key: 'address', example: 'Delhi' },
+];
 
 export default function DepotsPage() {
   const { user } = useAuth();
@@ -27,6 +34,7 @@ export default function DepotsPage() {
   const [editingId, setEditingId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [statusTarget, setStatusTarget] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ is_active: '' });
@@ -107,7 +115,10 @@ export default function DepotsPage() {
         title="Depots"
         description="Depot master data — regional facilities operating the fleet."
         actions={canWrite && (
-          <button onClick={startCreate}><Plus size={15} /> Add Depot</button>
+          <>
+            <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
+            <button onClick={startCreate}><Plus size={15} /> Add Depot</button>
+          </>
         )}
       />
 
@@ -199,6 +210,16 @@ export default function DepotsPage() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {importOpen && (
+        <CsvImportModal
+          entity="depots"
+          title="Import Depots from CSV"
+          columns={IMPORT_COLUMNS}
+          onClose={() => setImportOpen(false)}
+          onImported={load}
+        />
       )}
 
       {statusTarget && (

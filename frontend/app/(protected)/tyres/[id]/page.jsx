@@ -3,16 +3,23 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Printer } from 'lucide-react';
+import { Printer, AlertTriangle, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
 import { api, downloadFile } from '../../../../lib/api.js';
+import { useAuth } from '../../../../components/AuthContext.jsx';
 import { useSettings } from '../../../../components/SettingsContext.jsx';
+import { ROLES } from '../../../../lib/roles.js';
+import { AMENDABLE_FIELDS } from '../../../../lib/amendableFields.js';
 import { formatPressure } from '../../../../lib/units.js';
 import { formatDate } from '../../../../lib/dates.js';
 import Pagination from '../../../../components/Pagination.jsx';
 import PageHeader from '../../../../components/PageHeader.jsx';
 import LoadingState from '../../../../components/LoadingState.jsx';
 import EmptyState from '../../../../components/EmptyState.jsx';
+import AmendEventModal from '../../../../components/AmendEventModal.jsx';
+import AmendmentTimeline from '../../../../components/AmendmentTimeline.jsx';
 import QRCode from 'qrcode';
+
+const AMEND_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER];
 
 const EVENT_TYPE_LABELS = {
   nsd_reading: 'NSD Reading',
@@ -54,7 +61,9 @@ function describeEvent(e, pressureUnit) {
 
 export default function TyreDetailPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const { pressureUnit } = useSettings();
+  const canAmend = AMEND_ROLES.includes(user?.role);
   const [tyre, setTyre] = useState(null);
   const [error, setError] = useState('');
 
@@ -66,6 +75,11 @@ export default function TyreDetailPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [historyError, setHistoryError] = useState('');
+
+  const [amendmentsMap, setAmendmentsMap] = useState({});
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  const [amendingEvent, setAmendingEvent] = useState(null);
+  const [busMap, setBusMap] = useState({});
 
   const [qrCodeUrl, setQrCodeUrl] = useState('');
 
@@ -83,6 +97,25 @@ export default function TyreDetailPage() {
   }, [tyre]);
 
   useEffect(() => {
+    if (!canAmend) return;
+    api.get('/buses?pageSize=100').then((r) => {
+      setBusMap(Object.fromEntries(r.data.map((b) => [b.id, b.registration_no])));
+    });
+  }, [canAmend]);
+
+  async function loadAmendments(eventList) {
+    const map = {};
+    await Promise.all(eventList.map(async (ev) => {
+      try {
+        map[ev.id] = await api.get(`/events/${ev.id}/amendments`);
+      } catch {
+        map[ev.id] = [];
+      }
+    }));
+    setAmendmentsMap(map);
+  }
+
+  useEffect(() => {
     async function loadEvents() {
       setHistoryError('');
       try {
@@ -93,12 +126,30 @@ export default function TyreDetailPage() {
         const data = await api.get(`/events?${params.toString()}`);
         setEvents(data.data);
         setTotal(data.total);
+        setExpandedIds(new Set());
+        loadAmendments(data.data);
       } catch (err) {
         setHistoryError(err.message);
       }
     }
     loadEvents();
   }, [id, eventType, from, to, page]);
+
+  function toggleExpand(eventId) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  }
+
+  async function handleAmendmentSaved(event) {
+    setAmendingEvent(null);
+    const amendments = await api.get(`/events/${event.id}/amendments`);
+    setAmendmentsMap((prev) => ({ ...prev, [event.id]: amendments }));
+    setExpandedIds((prev) => new Set(prev).add(event.id));
+  }
 
   if (error) return <div className="card error-text">{error}</div>;
   if (!tyre) return <div className="card"><LoadingState label="Loading tyre..." /></div>;
@@ -182,23 +233,69 @@ export default function TyreDetailPage() {
                   <th>Event Type</th>
                   <th>Details</th>
                   <th>Recorded By</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {events.map((e) => (
-                  <tr key={e.id}>
-                    <td>{formatDate(e.event_date)}</td>
-                    <td><span className="badge">{EVENT_TYPE_LABELS[e.event_type]}</span></td>
-                    <td className="wrap">{describeEvent(e, pressureUnit)}</td>
-                    <td>{e.performed_by_name || '—'}</td>
-                  </tr>
-                ))}
+                {events.map((e) => {
+                  const amendments = amendmentsMap[e.id] || [];
+                  const isCorrected = amendments.length > 0;
+                  const isExpanded = expandedIds.has(e.id);
+                  return (
+                    <React.Fragment key={e.id}>
+                      <tr>
+                        <td>{formatDate(e.event_date)}</td>
+                        <td><span className="badge">{EVENT_TYPE_LABELS[e.event_type]}</span></td>
+                        <td className="wrap">
+                          {describeEvent(e, pressureUnit)}
+                          {isCorrected && (
+                            <span className="badge badge-warning" style={{ marginLeft: '0.5rem' }}>
+                              <AlertTriangle size={11} /> Corrected
+                            </span>
+                          )}
+                        </td>
+                        <td>{e.performed_by_name || '—'}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            {isCorrected && (
+                              <button type="button" className="ghost" onClick={() => toggleExpand(e.id)}>
+                                {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                {isExpanded ? 'Collapse' : 'Expand'}
+                              </button>
+                            )}
+                            {canAmend && AMENDABLE_FIELDS[e.event_type] && (
+                              <button type="button" className="secondary" onClick={() => setAmendingEvent(e)}>
+                                <Pencil size={13} /> Amend Event
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={5} style={{ background: 'var(--surface-muted)' }}>
+                            <AmendmentTimeline event={e} amendments={amendments} pressureUnit={pressureUnit} busMap={busMap} />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
         <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
       </div>
+
+      {amendingEvent && (
+        <AmendEventModal
+          event={amendingEvent}
+          eventTypeLabel={EVENT_TYPE_LABELS[amendingEvent.event_type]}
+          onClose={() => setAmendingEvent(null)}
+          onSaved={() => handleAmendmentSaved(amendingEvent)}
+        />
+      )}
     </div>
   );
 }

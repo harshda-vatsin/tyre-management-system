@@ -1197,6 +1197,12 @@ tr.row-accent-critical td:first-child {
   border-color: color-mix(in srgb, var(--info) 25%, transparent);
 }
 
+.status-banner.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
 .login-wrap {
   display: flex;
   align-items: center;

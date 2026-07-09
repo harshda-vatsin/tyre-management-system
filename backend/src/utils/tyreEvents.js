@@ -25,6 +25,22 @@ class ApiError extends Error {
   }
 }
 
+// Tyre Card Amendment workflow: which tyre_events columns may be corrected
+// per event_type. Deliberately excludes structural/relational fields (bus_id,
+// tyre_id, related_tyre_id, depot_id, position) -- amending those would
+// rewrite tyre state history rather than correct a clerical error, which is
+// exactly what this workflow must never do to tyre_events.
+const AMENDABLE_FIELDS = {
+  nsd_reading: ['nsd_value', 'notes'],
+  pressure_reading: ['pressure_value', 'notes'],
+  rotation: ['to_position', 'reason'],
+  replacement: ['reason'],
+  puncture_repair: ['repair_type', 'notes'],
+  inter_bus_transfer: ['to_bus_id', 'to_position', 'reason'],
+  send_to_store: ['nsd_value', 'stored_at', 'reason'],
+  condemnation: ['nsd_value', 'reason'],
+};
+
 // COALESCE(@event_date, datetime('now')): binding an explicit NULL parameter
 // overrides a column's DEFAULT clause in SQLite, so the fallback to "now" has
 // to happen in the statement itself, not by omitting the column.
@@ -407,4 +423,4 @@ function createCondemnation(user, { tyre_id, reason, nsd_value, event_date }) {
   return [event];
 }
 
-module.exports = { createTyreEvent, ApiError };
+module.exports = { createTyreEvent, ApiError, AMENDABLE_FIELDS };
