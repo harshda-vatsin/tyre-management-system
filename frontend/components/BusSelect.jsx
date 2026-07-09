@@ -88,7 +88,7 @@ export default function BusSelect({ value, onChange, depotId, label = 'Bus', pla
               style={{ padding: '0.4rem 0.6rem', cursor: 'pointer', fontSize: '0.85rem' }}
               onMouseDown={(e) => e.preventDefault()}
             >
-              <strong>{b.registration_no}</strong> — {b.bus_model_name}
+              <strong>{b.registration_no}</strong> - {b.bus_model_name}
             </li>
           ))}
         </ul>

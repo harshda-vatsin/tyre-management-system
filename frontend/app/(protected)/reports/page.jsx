@@ -191,7 +191,7 @@ export default function ReportsPage() {
                       <tbody>
                         {result.data.map((row, i) => (
                           <tr key={i}>
-                            {selectedReport.columns.map((c) => <td key={c.key}>{row[c.key] ?? '—'}</td>)}
+                            {selectedReport.columns.map((c) => <td key={c.key}>{row[c.key] ?? '-'}</td>)}
                           </tr>
                         ))}
                       </tbody>

@@ -289,7 +289,7 @@ export default function BatchInspectionPage() {
 
             {mountedSlots.length === 0 && (
               <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '-0.5rem' }}>
-                No tyres are mounted on this bus yet — mount tyres via Log Event or the Tyres page to record readings here.
+                No tyres are mounted on this bus yet. Mount tyres via Log Event or the Tyres page to record readings here.
               </p>
             )}
 
@@ -314,7 +314,7 @@ export default function BatchInspectionPage() {
       </div>
 
       {activeSlot && !activeSlot.tyre && (
-        <Modal title={`Position ${activeSlot.position} — Empty`} onClose={closeTyreModal} width={380}>
+        <Modal title={`Position ${activeSlot.position} (Empty)`} onClose={closeTyreModal} width={380}>
           <div className="status-banner info">
             <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} />
             <span>No tyre is currently mounted at position {activeSlot.position}, so there's nothing to log a reading against yet.</span>
@@ -330,7 +330,7 @@ export default function BatchInspectionPage() {
       )}
 
       {activeSlot && activeSlot.tyre && (
-        <Modal title={`${activeSlot.position} — ${activeSlot.tyre.tyre_number}`} onClose={closeTyreModal} width={380}>
+        <Modal title={`${activeSlot.position} : ${activeSlot.tyre.tyre_number}`} onClose={closeTyreModal} width={380}>
           <form onSubmit={saveTyreReading}>
             <div className="field">
               <label>NSD Value</label>
@@ -364,7 +364,7 @@ export default function BatchInspectionPage() {
               {(pressureFlag === 'WARNING' || pressureFlag === 'CRITICAL') && (
                 <span className={pressureFlag === 'CRITICAL' ? 'error-text' : 'field-hint'} style={pressureFlag === 'WARNING' ? { color: 'var(--warning)' } : undefined}>
                   {pressureFlag === 'CRITICAL' ? 'Critical: ' : 'Warning: '}
-                  outside the safe {(pressureFlag === 'CRITICAL' ? pressureThreshold.critical_min : pressureThreshold.warning_min) ?? '—'}–{(pressureFlag === 'CRITICAL' ? pressureThreshold.critical_max : pressureThreshold.warning_max) ?? '—'} psi range.
+                  outside the safe {(pressureFlag === 'CRITICAL' ? pressureThreshold.critical_min : pressureThreshold.warning_min) ?? '-'} to {(pressureFlag === 'CRITICAL' ? pressureThreshold.critical_max : pressureThreshold.warning_max) ?? '-'} psi range.
                 </span>
               )}
             </div>

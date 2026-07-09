@@ -41,21 +41,21 @@ function describeEvent(e, pressureUnit) {
     case 'pressure_reading':
       return `Pressure: ${formatPressure(e.pressure_value, pressureUnit)} at ${e.position} (${e.bus_registration_no})`;
     case 'rotation':
-      return `${e.from_position} → ${e.to_position} on ${e.bus_registration_no}${e.reason ? ` — ${e.reason}` : ''}`;
+      return `${e.from_position} → ${e.to_position} on ${e.bus_registration_no}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'replacement':
       return e.to_position
-        ? `Installed at ${e.to_position} on ${e.bus_registration_no}, replacing tyre ${e.related_tyre_number}${e.reason ? ` — ${e.reason}` : ''}`
-        : `Removed from ${e.from_position} on ${e.bus_registration_no}, replaced by tyre ${e.related_tyre_number}${e.reason ? ` — ${e.reason}` : ''}`;
+        ? `Installed at ${e.to_position} on ${e.bus_registration_no}, replacing tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`
+        : `Removed from ${e.from_position} on ${e.bus_registration_no}, replaced by tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'puncture_repair':
-      return `${e.repair_type} repair${e.notes ? ` — ${e.notes}` : ''}`;
+      return `${e.repair_type} repair${e.notes ? ` - ${e.notes}` : ''}`;
     case 'inter_bus_transfer':
-      return `${e.from_bus_registration_no}/${e.from_position} → ${e.to_bus_registration_no}/${e.to_position}${e.reason ? ` — ${e.reason}` : ''}`;
+      return `${e.from_bus_registration_no}/${e.from_position} → ${e.to_bus_registration_no}/${e.to_position}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'send_to_store':
-      return `Removed from ${e.from_bus_registration_no || '—'}/${e.from_position || '—'}, NSD ${e.nsd_value} mm, stored at ${e.stored_at} — ${e.reason}`;
+      return `Removed from ${e.from_bus_registration_no || '-'}/${e.from_position || '-'}, NSD ${e.nsd_value} mm, stored at ${e.stored_at} - ${e.reason}`;
     case 'condemnation':
-      return `Condemned at NSD ${e.nsd_value} mm — ${e.reason}`;
+      return `Condemned at NSD ${e.nsd_value} mm - ${e.reason}`;
     default:
-      return '—';
+      return '-';
   }
 }
 
@@ -174,12 +174,12 @@ export default function TyreDetailPage() {
       <div className="card" style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1.25rem' }}>
         <div className="detail-grid" style={{ flex: '1 1 500px' }}>
           <div><div className="detail-label">Brand / Manufacturer</div><div className="detail-value">{tyre.brand}</div></div>
-          <div><div className="detail-label">Model / Type</div><div className="detail-value">{tyre.model || '—'}</div></div>
-          <div><div className="detail-label">Size</div><div className="detail-value">{tyre.size || '—'}</div></div>
+          <div><div className="detail-label">Model / Type</div><div className="detail-value">{tyre.model || '-'}</div></div>
+          <div><div className="detail-label">Size</div><div className="detail-value">{tyre.size || '-'}</div></div>
           <div><div className="detail-label">Date of Purchase</div><div className="detail-value">{formatDate(tyre.purchase_date)}</div></div>
-          <div><div className="detail-label">Initial NSD</div><div className="detail-value">{tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '—'}</div></div>
+          <div><div className="detail-label">Initial NSD</div><div className="detail-value">{tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-'}</div></div>
           <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[tyre.status] || ''}`}>{tyre.status}</span></div></div>
-          <div><div className="detail-label">Current Depot</div><div className="detail-value">{tyre.depot_name || '—'}</div></div>
+          <div><div className="detail-label">Current Depot</div><div className="detail-value">{tyre.depot_name || '-'}</div></div>
           <div>
             <div className="detail-label">Current Bus / Position</div>
             <div className="detail-value">
@@ -187,7 +187,7 @@ export default function TyreDetailPage() {
                 <>
                   <Link href={`/buses/${tyre.current_bus_id}`}>{tyre.bus_registration_no}</Link> / {tyre.current_position}
                 </>
-              ) : '—'}
+              ) : '-' }
             </div>
           </div>
         </div>
@@ -254,7 +254,7 @@ export default function TyreDetailPage() {
                             </span>
                           )}
                         </td>
-                        <td>{e.performed_by_name || '—'}</td>
+                        <td>{e.performed_by_name || '-'}</td>
                         <td>
                           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                             {isCorrected && (

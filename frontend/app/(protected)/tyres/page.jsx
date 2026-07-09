@@ -170,7 +170,7 @@ export default function TyresPage() {
     <div>
       <PageHeader
         title="Tyres"
-        description="Tyre master data — brand, size, status, and current mount."
+        description="Tyre master data: brand, size, status, and current mount."
         actions={canWrite && (
           <>
             <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
@@ -198,7 +198,7 @@ export default function TyresPage() {
           <EmptyState icon={CircleDot} title="No tyres match these filters" />
         ) : (
           <>
-            <div className="table-wrap">
+            <div className="table-wrap desktop-only">
               <table>
                 <thead>
                   <tr>
@@ -216,8 +216,8 @@ export default function TyresPage() {
                       <td><Link href={`/tyres/${t.id}`}>{t.tyre_number}</Link></td>
                       <td>{t.brand}</td>
                       <td><span className={`badge ${STATUS_BADGE[t.status] || ''}`}>{t.status}</span></td>
-                      <td>{t.depot_name || '—'}</td>
-                      <td>{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '—'}</td>
+                      <td>{t.depot_name || '-'}</td>
+                      <td>{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '-'}</td>
                       {canWrite && (
                         <td>
                           <RowActionsMenu
@@ -233,6 +233,38 @@ export default function TyresPage() {
                 </tbody>
               </table>
             </div>
+
+            <div className="mobile-list-cards mobile-only">
+              {tyres.map((t) => (
+                <div key={t.id} className="mobile-record-card">
+                  <div className="mobile-card-row mobile-card-header">
+                    <Link href={`/tyres/${t.id}`} className="mobile-card-title">{t.tyre_number}</Link>
+                    <span className={`badge ${STATUS_BADGE[t.status] || ''}`}>{t.status}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Brand / Size</span>
+                    <span className="mobile-card-value">{t.brand} {t.size ? `(${t.size})` : ''}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Depot</span>
+                    <span className="mobile-card-value">{t.depot_name || '-'}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Bus / Position</span>
+                    <span className="mobile-card-value">{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '-'}</span>
+                  </div>
+                  {canWrite && (
+                    <div className="mobile-card-footer">
+                      <button className="secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => startEdit(t)}>Edit</button>
+                      {user.role === ROLES.ADMIN && (
+                        <button className="danger" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setDeleteTarget(t)}>Delete</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
             <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
           </>
         )}

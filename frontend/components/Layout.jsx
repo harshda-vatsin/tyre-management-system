@@ -81,6 +81,29 @@ export default function Layout({ children }) {
     setMobileOpen(false);
   }, [pathname]);
 
+  // Escape key closes mobile navigation drawer
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') {
+        setMobileOpen(false);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Prevent background body scrolling when mobile navigation is open
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [mobileOpen]);
+
   const visibleGroups = NAV_GROUPS
     .map((group) => ({ ...group, items: group.items.filter((item) => !item.roles || item.roles.includes(user?.role)) }))
     .filter((group) => group.items.length > 0);
@@ -103,7 +126,12 @@ export default function Layout({ children }) {
             {group.items.map((item) => {
               const Icon = item.icon;
               return (
-                <Link key={item.to} href={item.to} className={isActive(pathname, item.to) ? 'active' : ''}>
+                <Link
+                  key={item.to}
+                  href={item.to}
+                  className={isActive(pathname, item.to) ? 'active' : ''}
+                  onClick={() => setMobileOpen(false)}
+                >
                   <Icon size={16} />
                   {item.label}
                 </Link>
@@ -131,7 +159,7 @@ export default function Layout({ children }) {
       </div>
     </>
   );
-
+ 
   return (
     <div className="app-shell">
       <div className="mobile-topbar">
@@ -139,14 +167,17 @@ export default function Layout({ children }) {
           <Menu size={20} />
         </button>
         <strong>EBTMS</strong>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+          <ThemeToggle />
+        </div>
       </div>
-
+ 
       {mobileOpen && <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />}
-
+ 
       <aside className={`sidebar${mobileOpen ? ' open' : ''}`}>
         {sidebarContent}
       </aside>
-
+ 
       <div className="main-content">
         {children}
       </div>

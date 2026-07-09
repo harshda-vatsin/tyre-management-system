@@ -1,4 +1,4 @@
-// Validated categorical palette (dataviz skill, fixed order — see
+// Validated categorical palette (dataviz skill, fixed order, see
 // scripts/validate_palette.js "#2a78d6,#1baf7a,#eda100,#e34948" --mode light).
 // Reused by both National and Depot dashboards so tyre-status colors never
 // drift between the two views.

@@ -1,4 +1,4 @@
-// Frontend mirror of backend/src/utils/busLayout.js — used to render a live
+// Frontend mirror of backend/src/utils/busLayout.js, used to render a live
 // "this will generate: FL, FR, ..." preview and the bus position diagram.
 // The backend remains the single source of truth for what actually gets
 // stored (position codes only, unchanged here); this table additionally

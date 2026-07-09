@@ -45,7 +45,7 @@ export default function DepotDashboard({ depotId, onBack }) {
   return (
     <div>
       <PageHeader
-        title={`${data.depot.name} — Depot Dashboard`}
+        title={`${data.depot.name} | Depot Dashboard`}
         description={`${data.depot.region} · ${data.depot.code}`}
         actions={onBack && <button className="secondary" onClick={onBack}>&larr; Back to National Dashboard</button>}
       />
@@ -101,7 +101,7 @@ export default function DepotDashboard({ depotId, onBack }) {
                     <td><SeverityBadge severity={a.severity} /></td>
                     <td>{a.parameter_type}</td>
                     <td><Link href={`/tyres/${a.tyre_id}`}>{a.tyre_number}</Link></td>
-                    <td>{a.bus_registration_no || '—'}</td>
+                    <td>{a.bus_registration_no || '-'}</td>
                     <td>{a.opened_at}</td>
                   </tr>
                 ))}
@@ -167,7 +167,7 @@ export default function DepotDashboard({ depotId, onBack }) {
                     <tr key={t.tyre_id}>
                       <td><Link href={`/tyres/${t.tyre_id}`}>{t.tyre_number}</Link></td>
                       <td>{t.brand}</td>
-                      <td>{t.last_nsd_value != null ? `${t.last_nsd_value} mm` : '—'}</td>
+                      <td>{t.last_nsd_value != null ? `${t.last_nsd_value} mm` : '-'}</td>
                       <td>{t.days_in_storage}d</td>
                     </tr>
                   ))}
@@ -194,7 +194,7 @@ export default function DepotDashboard({ depotId, onBack }) {
                   {data.upcoming_inspections.map((t) => (
                     <tr key={t.tyre_id}>
                       <td><Link href={`/tyres/${t.tyre_id}`}>{t.tyre_number}</Link></td>
-                      <td>{t.bus_registration_no || '—'}</td>
+                      <td>{t.bus_registration_no || '-'}</td>
                       <td>{t.days_since_last_reading}d</td>
                     </tr>
                   ))}

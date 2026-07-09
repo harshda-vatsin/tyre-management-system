@@ -34,7 +34,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 const OTHER_MODEL_OPTION = '__other__';
 
 // FR-BM-01: Bus Registration Number / Chassis Number (VIN) are standardized
-// to trimmed, uppercase form — mirrors the same normalization applied
+// to trimmed, uppercase form, mirroring the same normalization applied
 // server-side in routes/buses.js.
 function normalizeCode(value) {
   return value.trim().toUpperCase();
@@ -70,7 +70,7 @@ export default function BusesPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
 
-  // "Other — Add New Model" quick-create popup, triggered from the Model /
+  // "Other - Add New Model" quick-create popup, triggered from the Model /
   // Make select. Reuses the same BusModelFields component and /bus-models
   // endpoint as the Bus Models admin page, so there's one creation path.
   const [addModelOpen, setAddModelOpen] = useState(false);
@@ -205,15 +205,15 @@ export default function BusesPage() {
   }
 
   // FR-BM-01: Number of Tyre Positions is not stored on the bus record itself
-  // — it's inherited from the selected Bus Model (existing FR-BM-02 relation)
-  // — so it's shown here as a derived read-only value, not a duplicate field.
+  //: it's inherited from the selected Bus Model (existing FR-BM-02 relation)
+  //, so it's shown here as a derived read-only value, not a duplicate field.
   const selectedModelPositions = models.find((m) => m.id === Number(form.bus_model_id))?.num_positions ?? null;
 
   return (
     <div>
       <PageHeader
         title="Buses"
-        description="Fleet vehicle master data — model, depot assignment, and operating status."
+        description="Fleet vehicle master data: model, depot assignment, and operating status."
         actions={canWrite && (
           <>
             <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
@@ -242,7 +242,7 @@ export default function BusesPage() {
           <EmptyState icon={BusIcon} title="No buses match these filters" />
         ) : (
           <>
-            <div className="table-wrap">
+            <div className="table-wrap desktop-only">
               <table>
                 <thead>
                   <tr>
@@ -281,6 +281,38 @@ export default function BusesPage() {
                 </tbody>
               </table>
             </div>
+
+            <div className="mobile-list-cards mobile-only">
+              {buses.map((b) => (
+                <div key={b.id} className="mobile-record-card">
+                  <div className="mobile-card-row mobile-card-header">
+                    <Link href={`/buses/${b.id}`} className="mobile-card-title">{b.registration_no}</Link>
+                    <span className={`badge ${STATUS_BADGE[b.status] || ''}`}>{b.status}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Model / Make</span>
+                    <span className="mobile-card-value">{b.bus_model_name} ({b.num_tyre_positions} Tyres)</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Depot</span>
+                    <span className="mobile-card-value">{b.depot_name}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Odometer</span>
+                    <span className="mobile-card-value">{b.odometer_km.toLocaleString()} km</span>
+                  </div>
+                  {canWrite && (
+                    <div className="mobile-card-footer">
+                      <button className="secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => startEdit(b)}>Edit</button>
+                      {user.role === ROLES.ADMIN && (
+                        <button className="danger" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setDeleteTarget(b)}>Delete</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
             <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
           </>
         )}
@@ -301,7 +333,7 @@ export default function BusesPage() {
             <div className="field">
               <label>Bus ID</label>
               <input value={editingId ? `#${editingId}` : 'Auto-generated on save'} disabled />
-              <span className="field-hint">Assigned automatically by the system — not editable.</span>
+              <span className="field-hint">Assigned automatically by the system: not editable.</span>
             </div>
             <div className="field">
               <label>Bus Registration Number *</label>
@@ -324,7 +356,7 @@ export default function BusesPage() {
               <select value={form.bus_model_id} onChange={(e) => handleModelSelectChange(e.target.value)} required>
                 <option value="">Select model</option>
                 {models.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.num_positions} positions)</option>)}
-                <option value={OTHER_MODEL_OPTION}>Other — Add New Model...</option>
+                <option value={OTHER_MODEL_OPTION}>Other - Add New Model...</option>
               </select>
             </div>
             <div className="field">
@@ -346,7 +378,7 @@ export default function BusesPage() {
                 placeholder="Select a model first"
                 disabled
               />
-              <span className="field-hint">Derived from the selected Model / Make's tyre position layout — not editable here.</span>
+              <span className="field-hint">Derived from the selected Model / Make's tyre position layout: not editable here.</span>
             </div>
             <div className="field">
               <label>Year of Manufacture *</label>

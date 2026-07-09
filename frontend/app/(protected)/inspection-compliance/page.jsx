@@ -73,7 +73,7 @@ export default function InspectionCompliancePage() {
         rate: total > 0 ? Math.round((onTimeRes.total / total) * 100) : 100,
       });
     } catch (err) {
-      // Non-fatal — summary row simply stays hidden.
+      // Non-fatal: summary row simply stays hidden.
     }
   }
 
@@ -138,8 +138,8 @@ export default function InspectionCompliancePage() {
                     <tr key={r.tyre_id}>
                       <td><Link href={`/tyres/${r.tyre_id}`}>{r.tyre_number}</Link></td>
                       <td>{r.brand}</td>
-                      <td>{r.bus_registration_no ? <Link href={`/buses/${r.current_bus_id}`}>{r.bus_registration_no}</Link> : '—'}</td>
-                      <td>{r.depot_name || '—'}</td>
+                      <td>{r.bus_registration_no ? <Link href={`/buses/${r.current_bus_id}`}>{r.bus_registration_no}</Link> : '-' }</td>
+                      <td>{r.depot_name || '-'}</td>
                       <td>{r.last_reading_date || 'Never'}</td>
                       <td>{r.days_since_last_reading}d</td>
                       <td><span className={`badge ${STATUS_BADGE_CLASS[r.inspection_status]}`}>{r.inspection_status}</span></td>

@@ -12,7 +12,7 @@ export default function BarChart({ data, valueSuffix = '' }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
       {data.map((d) => (
         <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 48px', alignItems: 'center', gap: '0.6rem' }}>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{d.label}</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={d.label}>{d.label}</span>
           <div style={{ background: 'var(--surface-muted)', borderRadius: 4, height: 10, overflow: 'hidden' }}>
             <div
               style={{

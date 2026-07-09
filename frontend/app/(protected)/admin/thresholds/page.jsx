@@ -205,7 +205,7 @@ export default function AdminThresholdsPage() {
                       <tr key={th.id}>
                         <td>{scopeLabel(th)}</td>
                         <td>{describeValues(th)}</td>
-                        <td>{th.updated_by_username || '—'}</td>
+                        <td>{th.updated_by_username || '-'}</td>
                         {canWrite && (
                           <td>
                             <RowActionsMenu
@@ -233,7 +233,7 @@ export default function AdminThresholdsPage() {
       })}
 
       {editing && (
-        <Modal title={`Edit Threshold — ${scopeLabel(editing)}`} onClose={() => setEditing(null)}>
+        <Modal title={`Edit Threshold: ${scopeLabel(editing)}`} onClose={() => setEditing(null)}>
           <form onSubmit={saveEdit}>
             {renderValueFields(PARAMETER_INFO[editing.parameter_type], editForm, setEditForm)}
             <div className="form-actions">
@@ -245,7 +245,7 @@ export default function AdminThresholdsPage() {
       )}
 
       {newParam && (
-        <Modal title={`Add ${PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'} Override — ${PARAMETER_INFO[newParam].label}`} onClose={() => setNewParam('')}>
+        <Modal title={`Add ${PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'} Override: ${PARAMETER_INFO[newParam].label}`} onClose={() => setNewParam('')}>
           <form onSubmit={saveNew}>
             <div className="field">
               <label>{PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'}</label>

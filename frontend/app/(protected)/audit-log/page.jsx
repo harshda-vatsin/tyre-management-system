@@ -37,7 +37,7 @@ const ACTION_BADGE = {
 };
 
 function formatDate(value) {
-  if (!value) return '—';
+  if (!value) return '-';
   const d = new Date(value.includes(' ') && !value.includes('T') ? value.replace(' ', 'T') + 'Z' : value);
   if (isNaN(d.getTime())) return value;
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -164,10 +164,10 @@ export default function AuditLogPage() {
               <div><div className="detail-label">Depot</div><div className="detail-value">{after?.depot_name || before?.depot_name || `Depot ID: ${after?.scope_id || before?.scope_id}`}</div></div>
             )}
             <div><div className="detail-label">Previous Value</div><div className="detail-value" style={{ color: 'var(--text-danger)', fontWeight: 600 }}>
-              {before ? `${before.warning_max || before.warning_min || '—'} ${before.unit || ''}` : 'Not set'}
+              {before ? `${before.warning_max || before.warning_min || '-'} ${before.unit || ''}` : 'Not set'}
             </div></div>
             <div><div className="detail-label">New Value</div><div className="detail-value" style={{ color: 'var(--text-success)', fontWeight: 600 }}>
-              {after ? `${after.warning_max || after.warning_min || '—'} ${after.unit || ''}` : 'Not set'}
+              {after ? `${after.warning_max || after.warning_min || '-'} ${after.unit || ''}` : 'Not set'}
             </div></div>
             {action === 'UPDATE' && before && after && (
               <div style={{ gridColumn: '1 / -1', marginTop: '0.5rem' }}>
@@ -394,7 +394,7 @@ export default function AuditLogPage() {
 
       <div className="card">
         {/* Redesigned Balanced Grid Filter Layout using plain operational terminology */}
-        <div className="toolbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', alignItems: 'end', marginBottom: '1.25rem' }}>
+        <div className="audit-filters-grid">
           
           <div className="field" style={{ margin: 0 }}>
             <label>Find an activity</label>
@@ -472,7 +472,7 @@ export default function AuditLogPage() {
           <EmptyState title="No audit log entries found" />
         ) : (
           <>
-            <div className="table-wrap">
+            <div className="table-wrap desktop-only">
               <table>
                 <thead>
                   <tr>
@@ -506,6 +506,41 @@ export default function AuditLogPage() {
                 </tbody>
               </table>
             </div>
+
+            <div className="mobile-list-cards mobile-only">
+              {logs.map((log) => (
+                <div key={log.id} className="mobile-record-card" onClick={() => setViewEntry(log)} style={{ cursor: 'pointer' }}>
+                  <div className="mobile-card-row mobile-card-header">
+                    <span className="mobile-card-title">Log #{log.id}</span>
+                    <span className={`badge ${ACTION_BADGE[log.action] || ''}`}>
+                      {ACTION_LABELS[log.action] || log.action}
+                    </span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Date / Time</span>
+                    <span className="mobile-card-value">{formatDate(log.created_at)}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Person</span>
+                    <span className="mobile-card-value">{log.username}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">What changed</span>
+                    <span className="mobile-card-value" style={{ fontWeight: 600 }}>
+                      {log.entityLabel} <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.8rem' }}>{log.entityRef}</span>
+                    </span>
+                  </div>
+                  <div className="mobile-card-row vertical">
+                    <span className="mobile-card-label">Summary</span>
+                    <span className="mobile-card-value" style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{log.changeSummary}</span>
+                  </div>
+                  <div className="mobile-card-footer">
+                    <button className="secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>View Details</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
             <Pagination
               page={page}
               pageSize={pageSize}
@@ -525,7 +560,7 @@ export default function AuditLogPage() {
             <div><div className="detail-label">Person who made the change</div><div className="detail-value">{viewEntry.username} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· User ID {viewEntry.user_id || 'system'}</span></div></div>
             <div><div className="detail-label">Activity</div><div className="detail-value"><span className={`badge ${ACTION_BADGE[viewEntry.action] || ''}`}>{ACTION_LABELS[viewEntry.action] || viewEntry.action}</span></div></div>
             <div><div className="detail-label">Changed item type</div><div className="detail-value">{viewEntry.entityLabel}</div></div>
-            <div><div className="detail-label">Changed item reference</div><div className="detail-value">{viewEntry.entityRef} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· Item ID {viewEntry.entity_id || '—'}</span></div></div>
+            <div><div className="detail-label">Changed item reference</div><div className="detail-value">{viewEntry.entityRef} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· Item ID {viewEntry.entity_id || '-'}</span></div></div>
           </div>
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '1rem 0 1.25rem 0' }} />
@@ -533,6 +568,35 @@ export default function AuditLogPage() {
           {/* Conditional Change Details rendering */}
           {renderModalDetails(viewEntry)}
 
+          {/* Collapsible Technical JSON details */}
+          {(viewEntry.before || viewEntry.after) && (
+            <div style={{ marginTop: '1.25rem' }}>
+              <details style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                <summary style={{ padding: '0.65rem 0.85rem', background: 'var(--surface-muted)', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>View technical data</span>
+                </summary>
+                <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }} className="grid-2col">
+                  {viewEntry.before && (
+                    <div style={{ minWidth: 0 }}>
+                      <div className="detail-label" style={{ marginBottom: '0.4rem' }}>State Before</div>
+                      <pre style={{ margin: 0, padding: '0.75rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', overflow: 'auto', maxHeight: '200px', fontFamily: 'var(--font-mono)' }}>
+                        {JSON.stringify(viewEntry.before, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {viewEntry.after && (
+                    <div style={{ minWidth: 0 }}>
+                      <div className="detail-label" style={{ marginBottom: '0.4rem' }}>State After</div>
+                      <pre style={{ margin: 0, padding: '0.75rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', overflow: 'auto', maxHeight: '200px', fontFamily: 'var(--font-mono)' }}>
+                        {JSON.stringify(viewEntry.after, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </div>
+          )}
+ 
           <div className="form-actions" style={{ marginTop: '1.5rem' }}>
             <button type="button" className="secondary" onClick={() => setViewEntry(null)}>Close</button>
           </div>

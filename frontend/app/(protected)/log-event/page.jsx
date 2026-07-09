@@ -259,7 +259,7 @@ export default function LogEventPage() {
 
   return (
     <div style={{ maxWidth: 560, margin: '0 auto' }}>
-      <PageHeader title="Log Event" description="Record a tyre card event — reading, movement, repair, or lifecycle change." />
+      <PageHeader title="Log Event" description="Record a tyre card event: reading, movement, repair, or lifecycle change." />
 
       <div className="card">
         <div className="form-section-title">Event Type</div>
@@ -288,7 +288,7 @@ export default function LogEventPage() {
                 <span className={`badge ${STATUS_BADGE[tyre.status] || ''}`}>{tyre.status}</span>
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
-                {tyre.bus_registration_no ? `Mounted on ${tyre.bus_registration_no} / ${tyre.current_position}` : `In depot: ${tyre.depot_name || '—'}`}
+                {tyre.bus_registration_no ? `Mounted on ${tyre.bus_registration_no} / ${tyre.current_position}` : `In depot: ${tyre.depot_name || '-'}`}
               </div>
             </div>
           )}

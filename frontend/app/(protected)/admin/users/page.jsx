@@ -195,7 +195,7 @@ function AdminUsersContent({ me }) {
                       <td>{u.username}</td>
                       <td>{u.email}</td>
                       <td>{u.role}</td>
-                      <td>{depots.find((d) => d.id === u.depot_id)?.name || '—'}</td>
+                      <td>{depots.find((d) => d.id === u.depot_id)?.name || '-'}</td>
                       <td><span className={`badge ${u.is_active ? 'badge-success' : ''}`}>{u.is_active ? 'Active' : 'Inactive'}</span></td>
                       <td>
                         <RowActionsMenu

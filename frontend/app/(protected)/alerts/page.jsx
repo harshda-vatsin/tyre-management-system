@@ -49,6 +49,8 @@ export default function AlertsPage() {
   });
   const [depots, setDepots] = useState([]);
 
+  const hasActiveFilters = Object.values(filters).some((v) => v !== '');
+
   const [resolveTarget, setResolveTarget] = useState(null);
   const [resolveNote, setResolveNote] = useState('');
   const [resolveError, setResolveError] = useState('');
@@ -107,7 +109,7 @@ export default function AlertsPage() {
         critical: criticalRes.total,
       });
     } catch (err) {
-      // Non-fatal — summary row simply stays hidden.
+      // Non-fatal: summary row simply stays hidden.
     }
   }
 
@@ -176,10 +178,51 @@ export default function AlertsPage() {
         {loading ? (
           <LoadingState label="Loading alerts..." />
         ) : alerts.length === 0 ? (
-          <EmptyState icon={CheckCircle2} title="No alerts match these filters" />
+          hasActiveFilters ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="No alerts match these filters"
+              description="Try resetting your filters or search query to find other alerts."
+              action={
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setPage(1);
+                    setFilters({
+                      search: '',
+                      status: '',
+                      severity: '',
+                      parameter_type: '',
+                      escalated: '',
+                      depot_id: '',
+                    });
+                  }}
+                >
+                  Reset Filters
+                </button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={CheckCircle2}
+              title="All systems normal"
+              description={
+                isFleetWide
+                  ? "There are no active or historical threshold breaches across the fleet. Every tyre is within its safe operating limits."
+                  : "There are no active or historical threshold breaches for tyres in your assigned depot."
+              }
+              action={
+                canWrite && (
+                  <Link href="/log-event">
+                    <button type="button">Log Tyre Event</button>
+                  </Link>
+                )
+              }
+            />
+          )
         ) : (
           <>
-            <div className="table-wrap">
+            <div className="table-wrap desktop-only">
               <table>
                 <thead>
                   <tr>
@@ -206,9 +249,9 @@ export default function AlertsPage() {
                       <td><StatusBadge status={a.status} /></td>
                       <td>{a.parameter_type}</td>
                       <td><Link href={`/tyres/${a.tyre_id}`} onClick={(e) => e.stopPropagation()}>{a.tyre_number}</Link></td>
-                      <td>{a.bus_registration_no || '—'}</td>
-                      <td>{a.depot_name || '—'}</td>
-                      <td>{a.reading_value ?? '—'} / {a.threshold_value ?? '—'}</td>
+                      <td>{a.bus_registration_no || '-'}</td>
+                      <td>{a.depot_name || '-'}</td>
+                      <td>{a.reading_value ?? '-'} / {a.threshold_value ?? '-'}</td>
                       <td>{a.age_days}d</td>
                       {canWrite && (
                         <td>
@@ -228,6 +271,57 @@ export default function AlertsPage() {
                 </tbody>
               </table>
             </div>
+
+            <div className="mobile-list-cards mobile-only">
+              {alerts.map((a) => (
+                <div
+                  key={a.id}
+                  className={`mobile-record-card ${a.severity === 'Critical' && a.status !== 'Resolved' ? 'row-accent-critical' : ''}`}
+                  onClick={() => handleViewDetails(a.id)}
+                  style={{ cursor: 'pointer', borderLeft: a.severity === 'Critical' && a.status !== 'Resolved' ? '4px solid var(--danger)' : undefined }}
+                >
+                  <div className="mobile-card-row mobile-card-header">
+                    <span className="mobile-card-title">{a.parameter_type} Alert</span>
+                    <span className="mobile-card-value">Age: {a.age_days}d</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Tyre / Bus</span>
+                    <span className="mobile-card-value">
+                      <Link href={`/tyres/${a.tyre_id}`} onClick={(e) => e.stopPropagation()}>{a.tyre_number}</Link>
+                      {a.bus_registration_no ? ` / ${a.bus_registration_no}` : ''}
+                    </span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Depot</span>
+                    <span className="mobile-card-value">{a.depot_name || '-'}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Reading / Threshold</span>
+                    <span className="mobile-card-value">{a.reading_value ?? '-'} / {a.threshold_value ?? '-'}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Status & Severity</span>
+                    <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                      <SeverityBadge severity={a.severity} />
+                      <StatusBadge status={a.status} />
+                      <EscalatedBadge isEscalated={a.is_escalated} />
+                    </div>
+                  </div>
+                  {canWrite && (
+                    <div className="mobile-card-footer" onClick={(e) => e.stopPropagation()}>
+                      <Link href={`/alerts/${a.id}`} className="btn secondary" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>View Details</Link>
+                      {a.status === 'Open' && (
+                        <button className="secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleAcknowledge(a.id)}>Acknowledge</button>
+                      )}
+                      {a.status !== 'Resolved' && (
+                        <button style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setResolveTarget(a)}>Resolve</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
             <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
           </>
         )}
@@ -259,12 +353,12 @@ export default function AlertsPage() {
               <div><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={detailAlert.status} /></div></div>
               <div><div className="detail-label">Parameter</div><div className="detail-value">{detailAlert.parameter_type}</div></div>
               <div><div className="detail-label">Tyre</div><div className="detail-value">{detailAlert.tyre_number}</div></div>
-              <div><div className="detail-label">Bus</div><div className="detail-value">{detailAlert.bus_registration_no || '—'}</div></div>
-              <div><div className="detail-label">Depot</div><div className="detail-value">{detailAlert.depot_name || '—'}</div></div>
-              <div><div className="detail-label">Reading / Threshold</div><div className="detail-value">{detailAlert.reading_value ?? '—'} / {detailAlert.threshold_value ?? '—'}</div></div>
-              <div><div className="detail-label">Resolved At</div><div className="detail-value">{detailAlert.resolved_at || '—'}</div></div>
-              <div><div className="detail-label">Resolved By</div><div className="detail-value">{detailAlert.resolved_at ? (detailAlert.resolved_by_username || 'System') : '—'}</div></div>
-              <div style={{ gridColumn: '1 / -1' }}><div className="detail-label">Resolution Note</div><div className="detail-value">{detailAlert.resolution_note || '—'}</div></div>
+              <div><div className="detail-label">Bus</div><div className="detail-value">{detailAlert.bus_registration_no || '-'}</div></div>
+              <div><div className="detail-label">Depot</div><div className="detail-value">{detailAlert.depot_name || '-'}</div></div>
+              <div><div className="detail-label">Reading / Threshold</div><div className="detail-value">{detailAlert.reading_value ?? '-'} / {detailAlert.threshold_value ?? '-'}</div></div>
+              <div><div className="detail-label">Resolved At</div><div className="detail-value">{detailAlert.resolved_at || '-'}</div></div>
+              <div><div className="detail-label">Resolved By</div><div className="detail-value">{detailAlert.resolved_at ? (detailAlert.resolved_by_username || 'System') : '-'}</div></div>
+              <div style={{ gridColumn: '1 / -1' }}><div className="detail-label">Resolution Note</div><div className="detail-value">{detailAlert.resolution_note || '-'}</div></div>
             </div>
           )}
         </Modal>

@@ -105,7 +105,7 @@ export default function BusDetailPage() {
           <div><div className="detail-label">Model / Make</div><div className="detail-value">{bus.bus_model_name} ({bus.bus_model_manufacturer})</div></div>
           <div><div className="detail-label">Associated Depot</div><div className="detail-value">{bus.depot_name}</div></div>
           <div><div className="detail-label">Number of Tyre Positions</div><div className="detail-value">{bus.num_tyre_positions}</div></div>
-          <div><div className="detail-label">Year of Manufacture</div><div className="detail-value">{bus.year_of_manufacture || '—'}</div></div>
+          <div><div className="detail-label">Year of Manufacture</div><div className="detail-value">{bus.year_of_manufacture || '-'}</div></div>
           <div><div className="detail-label">Date of Entry into Fleet</div><div className="detail-value">{formatDate(bus.date_of_entry_into_fleet)}</div></div>
           <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[bus.status] || ''}`}>{bus.status}</span></div></div>
           <div><div className="detail-label">Odometer</div><div className="detail-value">{bus.odometer_km.toLocaleString()} km</div></div>
@@ -136,16 +136,16 @@ export default function BusDetailPage() {
                 <tr key={slot.position}>
                   <td>{slot.position}</td>
                   <td>{slot.tyre ? <Link href={`/tyres/${slot.tyre.id}`}>{slot.tyre.tyre_number}</Link> : <span style={{ color: 'var(--text-muted)' }}>Empty</span>}</td>
-                  <td>{slot.tyre ? <span className="badge">{slot.tyre.status}</span> : '—'}</td>
+                  <td>{slot.tyre ? <span className="badge">{slot.tyre.status}</span> : '-'}</td>
                   <td>
                     {slot.tyre?.last_nsd_value != null ? (
                       <span className="reading-value" data-flag={slot.tyre.flag_status || 'unset'}>{slot.tyre.last_nsd_value} mm</span>
-                    ) : '—'}
+                    ) : '-' }
                   </td>
                   <td>
                     {slot.tyre?.last_pressure_value != null ? (
                       <span className="reading-value" data-flag={slot.tyre.flag_status || 'unset'}>{formatPressure(slot.tyre.last_pressure_value, pressureUnit)}</span>
-                    ) : '—'}
+                    ) : '-' }
                   </td>
                   <td>{formatDate(slot.tyre?.last_event_date)}</td>
                 </tr>

@@ -4,10 +4,10 @@ import React from 'react';
 import { getPositionLayout, SUPPORTED_TYRE_COUNTS } from '../lib/busLayout.js';
 
 // Shared Bus Model form fields (Name, Manufacturer, Tyre Count), used by the
-// Bus Models admin page and by the "Other — Add New Model" quick-create
+// Bus Models admin page and by the "Other - Add New Model" quick-create
 // popup on the Buses page, so the two creation paths can never drift out of
 // sync. FR-BM-XX: the admin only picks a total tyre count from the
-// predefined set — tyre positions are system-generated from it, never
+// predefined set: tyre positions are system-generated from it, never
 // manually configured.
 export function emptyBusModelForm() {
   return { name: '', manufacturer: '', num_positions: SUPPORTED_TYRE_COUNTS[0] };

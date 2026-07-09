@@ -5,7 +5,7 @@ import { ThemeProvider } from '../components/ThemeProvider.jsx';
 import { THEME_STORAGE_KEY } from '../lib/theme.js';
 
 export const metadata = {
-  title: 'EBTMS — EV Bus Tyre Management System',
+  title: 'EBTMS | EV Bus Tyre Management System',
   description: 'Fleet tyre lifecycle management for an EV bus operator',
 };
 

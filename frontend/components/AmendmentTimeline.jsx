@@ -6,12 +6,12 @@ import { formatDateTime } from '../lib/dates.js';
 import { AMENDABLE_FIELDS, FIELD_LABELS } from '../lib/amendableFields.js';
 
 function formatFieldValue(key, value, pressureUnit, busMap) {
-  if (value === null || value === undefined || value === '') return '—';
+  if (value === null || value === undefined || value === '') return '-';
   switch (key) {
     case 'nsd_value':
       return `${value} mm`;
     case 'pressure_value':
-      return formatPressure(value, pressureUnit) || '—';
+      return formatPressure(value, pressureUnit) || '-';
     case 'to_bus_id':
       return (busMap && busMap[value]) || `Bus #${value}`;
     case 'repair_type':
@@ -71,7 +71,7 @@ export default function AmendmentTimeline({ event, amendments, pressureUnit, bus
               {a.reason}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-              Corrected by {a.amended_by_name || a.amended_by_username || '—'} on {formatDateTime(a.amended_at)}
+              Corrected by {a.amended_by_name || a.amended_by_username || '-'} on {formatDateTime(a.amended_at)}
             </div>
           </div>
         );

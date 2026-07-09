@@ -69,8 +69,8 @@ export default function TyreSelect({ value, onChange, status, mountedOnly, label
               style={{ padding: '0.4rem 0.6rem', cursor: 'pointer', fontSize: '0.85rem' }}
               onMouseDown={(e) => e.preventDefault()}
             >
-              <strong>{t.tyre_number}</strong> — {t.brand} — <span className="badge">{t.status}</span>
-              {t.bus_registration_no ? ` — ${t.bus_registration_no}/${t.current_position}` : ''}
+              <strong>{t.tyre_number}</strong> - {t.brand} - <span className="badge">{t.status}</span>
+              {t.bus_registration_no ? ` - ${t.bus_registration_no}/${t.current_position}` : ''}
             </li>
           ))}
         </ul>

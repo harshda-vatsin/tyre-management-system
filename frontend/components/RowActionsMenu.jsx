@@ -4,12 +4,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { MoreVertical } from 'lucide-react';
 
 // Overflow "..." menu for table rows. `actions` is an array of
-// { label, onClick, danger, hidden } — hidden entries are skipped so callers
+// { label, onClick, danger, hidden }: hidden entries are skipped so callers
 // can keep RBAC checks inline without extra conditionals at the call site.
 //
 // The menu is positioned with `fixed` (computed from the trigger button's
 // rect) rather than `absolute` inside the row, because table rows sit inside
-// a horizontally-scrollable `.table-wrap` (`overflow-x: auto`) — per the CSS
+// a horizontally-scrollable `.table-wrap` (`overflow-x: auto`) , per the CSS
 // overflow spec that forces `overflow-y` to clip too, so an absolutely
 // positioned menu near the bottom of the table gets cut off after the first
 // item. Fixed positioning escapes that clipping entirely.

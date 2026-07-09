@@ -130,7 +130,7 @@ export default function AmendEventModal({ event, eventTypeLabel, onClose, onSave
   }
 
   return (
-    <Modal title={`Amend Event — ${eventTypeLabel}`} onClose={onClose} width={480}>
+    <Modal title={`Amend Event: ${eventTypeLabel}`} onClose={onClose} width={480}>
       <form onSubmit={handleSubmit}>
         <div className="form-section-title">Corrected Values</div>
         {fields.map(renderField)}

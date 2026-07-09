@@ -113,7 +113,7 @@ export default function DepotsPage() {
     <div>
       <PageHeader
         title="Depots"
-        description="Depot master data — regional facilities operating the fleet."
+        description="Depot master data: regional facilities operating the fleet."
         actions={canWrite && (
           <>
             <button className="secondary" onClick={() => setImportOpen(true)}><UploadCloud size={15} /> Import CSV</button>
@@ -142,45 +142,78 @@ export default function DepotsPage() {
             action={canWrite && <button onClick={startCreate}><Plus size={15} /> Add Depot</button>}
           />
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Code</th>
-                  <th>Region</th>
-                  <th>Address</th>
-                  <th>Active Buses</th>
-                  <th>Total Tyres</th>
-                  <th>Status</th>
-                  {canWrite && <th></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {depots.map((d) => (
-                  <tr key={d.id}>
-                    <td>{d.name}</td>
-                    <td>{d.code}</td>
-                    <td>{d.region}</td>
-                    <td className="wrap">{d.address}</td>
-                    <td>{d.active_bus_count}</td>
-                    <td>{d.total_tyre_count}</td>
-                    <td><span className={`badge ${d.is_active ? 'badge-success' : ''}`}>{d.is_active ? 'Active' : 'Inactive'}</span></td>
-                    {canWrite && (
-                      <td>
-                        <RowActionsMenu
-                          actions={[
-                            { label: 'Edit', onClick: () => startEdit(d) },
-                            { label: d.is_active ? 'Deactivate' : 'Activate', danger: d.is_active, onClick: () => setStatusTarget(d) },
-                          ]}
-                        />
-                      </td>
-                    )}
+          <>
+            <div className="table-wrap desktop-only">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Code</th>
+                    <th>Region</th>
+                    <th>Address</th>
+                    <th>Active Buses</th>
+                    <th>Total Tyres</th>
+                    <th>Status</th>
+                    {canWrite && <th></th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {depots.map((d) => (
+                    <tr key={d.id}>
+                      <td>{d.name}</td>
+                      <td>{d.code}</td>
+                      <td>{d.region}</td>
+                      <td className="wrap">{d.address}</td>
+                      <td>{d.active_bus_count}</td>
+                      <td>{d.total_tyre_count}</td>
+                      <td><span className={`badge ${d.is_active ? 'badge-success' : ''}`}>{d.is_active ? 'Active' : 'Inactive'}</span></td>
+                      {canWrite && (
+                        <td>
+                          <RowActionsMenu
+                            actions={[
+                              { label: 'Edit', onClick: () => startEdit(d) },
+                              { label: d.is_active ? 'Deactivate' : 'Activate', danger: d.is_active, onClick: () => setStatusTarget(d) },
+                            ]}
+                          />
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mobile-list-cards mobile-only">
+              {depots.map((d) => (
+                <div key={d.id} className="mobile-record-card">
+                  <div className="mobile-card-row mobile-card-header">
+                    <span className="mobile-card-title">{d.name}</span>
+                    <span className={`badge ${d.is_active ? 'badge-success' : ''}`}>{d.is_active ? 'Active' : 'Inactive'}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Code / Region</span>
+                    <span className="mobile-card-value">{d.code} ({d.region || 'No region'})</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">Active Buses / Tyres</span>
+                    <span className="mobile-card-value">{d.active_bus_count} Buses / {d.total_tyre_count} Tyres</span>
+                  </div>
+                  <div className="mobile-card-row vertical">
+                    <span className="mobile-card-label">Address</span>
+                    <span className="mobile-card-value">{d.address || '-'}</span>
+                  </div>
+                  {canWrite && (
+                    <div className="mobile-card-footer">
+                      <button className="secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => startEdit(d)}>Edit</button>
+                      <button className={d.is_active ? 'danger' : 'success'} style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setStatusTarget(d)}>
+                        {d.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -226,7 +259,7 @@ export default function DepotsPage() {
         <ConfirmDialog
           title={statusTarget.is_active ? 'Deactivate Depot' : 'Activate Depot'}
           message={statusTarget.is_active
-            ? `Deactivate "${statusTarget.name}"? It stays in the system with its full history — nothing is deleted.`
+            ? `Deactivate "${statusTarget.name}"? It stays in the system with its full history. Nothing is deleted.`
             : `Reactivate "${statusTarget.name}"?`}
           confirmLabel={statusTarget.is_active ? 'Deactivate' : 'Activate'}
           danger={statusTarget.is_active}
