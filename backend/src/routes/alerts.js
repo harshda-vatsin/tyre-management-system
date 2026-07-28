@@ -9,6 +9,7 @@ const db = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { acknowledgeAlert, resolveAlertManually, escalateStaleOpenAlerts, ApiError } = require('../utils/alertService');
 const { syncInspectionAlerts } = require('../utils/inspectionService');
+const { syncRotationAlerts } = require('../utils/rotationService');
 const { ROLES, isDepotScoped } = require('../utils/roles');
 
 const router = express.Router();
@@ -52,6 +53,7 @@ router.use(authenticate);
 function reconcile(req) {
   escalateStaleOpenAlerts();
   syncInspectionAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
+  syncRotationAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
 }
 
 router.get('/', (req, res) => {

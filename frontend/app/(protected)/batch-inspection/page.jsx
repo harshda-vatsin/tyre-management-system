@@ -39,6 +39,7 @@ export default function BatchInspectionPage() {
   const [activeSlot, setActiveSlot] = useState(null);
   const [modalNsd, setModalNsd] = useState('');
   const [modalPressure, setModalPressure] = useState('');
+  const [modalGrooves, setModalGrooves] = useState({ nsd_g1: '', nsd_g2: '', nsd_g3: '', nsd_g4: '' });
 
   // FR-RW-02: resolved once per bus (not per keystroke) so the modal can show
   // an immediate inline warning as a value is typed, mirroring the same
@@ -124,6 +125,12 @@ export default function BatchInspectionPage() {
       const existing = readings[slot.tyre.id] || {};
       setModalNsd(existing.nsd_value ?? '');
       setModalPressure(existing.pressure_value ?? '');
+      setModalGrooves({
+        nsd_g1: existing.nsd_g1 ?? '',
+        nsd_g2: existing.nsd_g2 ?? '',
+        nsd_g3: existing.nsd_g3 ?? '',
+        nsd_g4: existing.nsd_g4 ?? '',
+      });
     }
   }
 
@@ -131,12 +138,15 @@ export default function BatchInspectionPage() {
     setActiveSlot(null);
     setModalNsd('');
     setModalPressure('');
+    setModalGrooves({ nsd_g1: '', nsd_g2: '', nsd_g3: '', nsd_g4: '' });
   }
 
   function saveTyreReading(e) {
     e.preventDefault();
-    setReading(activeSlot.tyre.id, 'nsd_value', modalNsd);
-    setReading(activeSlot.tyre.id, 'pressure_value', modalPressure);
+    setReadings((r) => ({
+      ...r,
+      [activeSlot.tyre.id]: { ...r[activeSlot.tyre.id], nsd_value: modalNsd, pressure_value: modalPressure, ...modalGrooves },
+    }));
     closeTyreModal();
   }
 
@@ -162,7 +172,7 @@ export default function BatchInspectionPage() {
     }
 
     const reading = readings[slot.tyre.id];
-    const hasReading = !!reading && (reading.nsd_value !== undefined && reading.nsd_value !== '' || reading.pressure_value !== undefined && reading.pressure_value !== '');
+    const hasReading = !!reading && ['nsd_value', 'pressure_value', 'nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].some((k) => reading[k] !== undefined && reading[k] !== '');
 
     return (
       <button
@@ -194,8 +204,11 @@ export default function BatchInspectionPage() {
         tyre_id: Number(tyreId),
         ...(vals.nsd_value !== undefined && vals.nsd_value !== '' ? { nsd_value: Number(vals.nsd_value) } : {}),
         ...(vals.pressure_value !== undefined && vals.pressure_value !== '' ? { pressure_value: Number(vals.pressure_value) } : {}),
+        ...['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].reduce((acc, k) => (
+          vals[k] !== undefined && vals[k] !== '' ? { ...acc, [k]: Number(vals[k]) } : acc
+        ), {}),
       }))
-      .filter((r) => r.nsd_value !== undefined || r.pressure_value !== undefined);
+      .filter((r) => r.nsd_value !== undefined || r.pressure_value !== undefined || r.nsd_g1 !== undefined || r.nsd_g2 !== undefined || r.nsd_g3 !== undefined || r.nsd_g4 !== undefined);
 
     if (entries.length === 0) {
       setError('Enter at least one NSD or Pressure reading before submitting.');
@@ -349,6 +362,21 @@ export default function BatchInspectionPage() {
                   at or below the {nsdFlag === 'CRITICAL' ? nsdThreshold.critical_max : nsdThreshold.warning_max}mm threshold.
                 </span>
               )}
+            </div>
+            <div className="field">
+              <label>Per-Groove Readings (optional)</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].map((key, i) => (
+                  <input
+                    key={key}
+                    type="number" step="0.1" min="0" max="25"
+                    placeholder={`G${i + 1}`}
+                    value={modalGrooves[key]}
+                    onChange={(e) => setModalGrooves((g) => ({ ...g, [key]: e.target.value }))}
+                  />
+                ))}
+              </div>
+              <span className="field-hint">If all 4 are entered and NSD Value is left blank, NSD Value is taken as their minimum.</span>
             </div>
             <div className="field">
               <label>Pressure Value</label>

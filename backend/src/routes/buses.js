@@ -17,10 +17,12 @@ const SELECT_BUS = `
   SELECT
     b.*,
     d.name AS depot_name, d.code AS depot_code,
+    p.name AS package_name, p.code AS package_code,
     m.name AS bus_model_name, m.manufacturer AS bus_model_manufacturer,
     m.num_positions AS num_tyre_positions, m.position_labels_json AS position_labels_json
   FROM buses b
   JOIN depots d ON d.id = b.depot_id
+  LEFT JOIN packages p ON p.id = b.package_id
   JOIN bus_models m ON m.id = b.bus_model_id
 `;
 
@@ -140,6 +142,7 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
   const {
     bus_model_id,
     depot_id,
+    package_id,
     status,
   } = req.body || {};
   const registration_no = normalizeCode(req.body?.registration_no);
@@ -172,11 +175,12 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
   try {
     const info = db
       .prepare(`
-        INSERT INTO buses (depot_id, registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO buses (depot_id, package_id, registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         depot_id,
+        package_id || null,
         registration_no,
         chassis_no,
         bus_model_id,
@@ -211,6 +215,7 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   const date_of_entry_into_fleet = req.body?.date_of_entry_into_fleet ?? before.date_of_entry_into_fleet;
   const status = req.body?.status ?? before.status;
   const odometer_km = req.body?.odometer_km ?? before.odometer_km;
+  const package_id = req.body?.package_id !== undefined ? req.body.package_id : before.package_id;
   // Depot reassignment goes through the dedicated transfer endpoint, not a plain edit.
   const depot_id = before.depot_id;
 
@@ -225,12 +230,20 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   if (dateError) return res.status(400).json({ error: dateError });
 
   try {
-    db.prepare(`
-      UPDATE buses
-      SET registration_no = ?, chassis_no = ?, bus_model_id = ?, year_of_manufacture = ?,
-          date_of_entry_into_fleet = ?, status = ?, odometer_km = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status, odometer_km, req.params.id);
+    const runUpdate = db.transaction(() => {
+      db.prepare(`
+        UPDATE buses
+        SET registration_no = ?, chassis_no = ?, bus_model_id = ?, year_of_manufacture = ?,
+            date_of_entry_into_fleet = ?, status = ?, odometer_km = ?, package_id = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status, odometer_km, package_id || null, req.params.id);
+      // Tyres inherit current_package_id from their mounted bus the same way
+      // they inherit current_depot_id -- keep them in sync on reassignment.
+      if ((package_id || null) !== before.package_id) {
+        db.prepare(`UPDATE tyres SET current_package_id = ?, updated_at = datetime('now') WHERE current_bus_id = ?`).run(package_id || null, req.params.id);
+      }
+    });
+    runUpdate();
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A bus with this registration number or chassis number already exists' });

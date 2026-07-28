@@ -132,7 +132,7 @@ function seed() {
           size: '275/70 R22.5',
           purchase_date: '2025-02-01',
           initial_nsd: 12,
-          status: 'In Service',
+          status: 'Active',
           current_bus_id: busIds[reg],
           current_position: pos,
           current_depot_id: bus.depot_id,
@@ -158,7 +158,7 @@ function seed() {
       tyreCounter += 1;
     }
 
-    // A couple of condemned / under-repair tyres for status filter coverage.
+    // A couple of scrapped / under-repair tyres for status filter coverage.
     tyres.push({
       tyre_number: `TYR-${String(tyreCounter).padStart(4, '0')}`,
       brand: 'MRF',
@@ -166,7 +166,7 @@ function seed() {
       size: '275/70 R22.5',
       purchase_date: '2024-08-10',
       initial_nsd: 12,
-      status: 'Condemned',
+      status: 'Scrapped',
       current_bus_id: null,
       current_position: null,
       current_depot_id: depotIds['DEL-C'],

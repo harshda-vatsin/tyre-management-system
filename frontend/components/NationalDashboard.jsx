@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Warehouse, Bus, CircleDot, AlertTriangle, ShieldCheck, ArrowRight, PartyPopper } from 'lucide-react';
+import { Warehouse, Bus, CircleDot, AlertTriangle, ShieldCheck, ArrowRight, PartyPopper, Wrench, Truck, RefreshCw, RotateCw, FileWarning, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import StatCard from './StatCard.jsx';
 import BarChart from './BarChart.jsx';
@@ -40,6 +40,17 @@ export default function NationalDashboard({ onDrillDown }) {
         <StatCard label="Tyres" value={data.fleet_summary.total_tyres} accent="#1baf7a" icon={CircleDot} />
         <StatCard label="Active Alerts" value={data.fleet_summary.active_alerts} accent="#b3261e" icon={AlertTriangle} />
         <StatCard label="Fleet Compliance" value={`${data.fleet_summary.overall_compliance_pct}%`} accent="#1a7f37" icon={ShieldCheck} />
+      </div>
+
+      <div className="stat-grid">
+        <StatCard label="Repair Queue" value={data.lifecycle_group_counts.repair_queue} accent="#eda100" icon={Wrench} />
+        <StatCard label="At Retread Vendor" value={data.lifecycle_group_counts.at_vendor} accent="#eda100" icon={Truck} />
+        <StatCard label="Retreaded (Lifetime)" value={data.lifecycle_group_counts.retreaded_total} accent="#1baf7a" icon={RefreshCw} />
+        <StatCard label="Rotation Due/Overdue" value={data.rotation_counts.due + data.rotation_counts.overdue} accent="#eda100" icon={RotateCw} />
+        <StatCard label="NSD Critical" value={data.alert_counts_by_parameter.NSD.Critical} accent="#e34948" icon={AlertTriangle} />
+        <StatCard label="Pressure Critical" value={data.alert_counts_by_parameter.PRESSURE.Critical} accent="#e34948" icon={AlertTriangle} />
+        <StatCard label="Warranty Pending" value={data.lifecycle_group_counts.warranty_pending} accent="#1d4ed8" icon={FileWarning} />
+        <StatCard label="Scrapped" value={data.lifecycle_group_counts.scrapped} accent="#b3261e" icon={Trash2} />
       </div>
 
       <div className="grid-2col">

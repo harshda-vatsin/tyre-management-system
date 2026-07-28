@@ -7,9 +7,12 @@
 const db = require('../db');
 const { resolveThreshold } = require('./thresholdEngine');
 const { computeInspectionCompliance, listInServiceTyresWithLastReading } = require('./inspectionService');
+const { computeRotationCompliance, listInServiceTyresWithLastRotation } = require('./rotationService');
+const { ALL_STATUSES } = require('./tyreLifecycle');
 
-// Standard tyre inventory status labels
-const TYRE_STATUSES = ['In Service', 'In Store', 'Under Repair', 'Condemned'];
+// The 6 simplified operational statuses, so every one gets a guaranteed
+// zero-filled entry in tyre_status_counts even if no tyre currently holds it.
+const TYRE_STATUSES = ALL_STATUSES;
 
 /**
  * Counts tyres grouped by status ('In Service', 'In Store', etc.).
@@ -69,6 +72,99 @@ function getInspectionCounts(depotId) {
     else if (status === 'Overdue') overdue += 1;
   }
   return { due, overdue };
+}
+
+/**
+ * Counts tyres that are either "Due" or "Overdue" for rotation, mirroring
+ * getInspectionCounts exactly but against the rotation clock.
+ *
+ * @param {number|null} [depotId]
+ * @returns {{due: number, overdue: number}}
+ */
+function getRotationCounts(depotId) {
+  const threshold = resolveThreshold('ROTATION_INTERVAL', {});
+  const kmThreshold = resolveThreshold('ROTATION_INTERVAL_KM', {});
+  const tyres = listInServiceTyresWithLastRotation(depotId);
+  let due = 0;
+  let overdue = 0;
+  for (const t of tyres) {
+    const { status } = computeRotationCompliance(t, t.last_rotation_date, threshold, {
+      lastRotationOdometerKm: t.last_rotation_odometer_km,
+      currentOdometerKm: t.current_odometer_km,
+      kmThreshold,
+    });
+    if (status === 'Due') due += 1;
+    else if (status === 'Overdue') overdue += 1;
+  }
+  return { due, overdue };
+}
+
+/**
+ * Active alert counts broken down by parameter type (NSD/PRESSURE/
+ * INSPECTION/ROTATION) and severity, for the dashboard's "Pressure
+ * Critical"/"NSD Critical" cards -- getActiveAlertCounts only sums across
+ * every parameter type, which isn't granular enough for those.
+ *
+ * @param {number|null} [depotId]
+ * @returns {Record<string, {Warning: number, Critical: number}>}
+ */
+function getAlertCountsByParameter(depotId) {
+  const params = {};
+  let where = `WHERE status IN ('Open', 'Acknowledged')`;
+  if (depotId) {
+    where += ' AND depot_id = @depotId';
+    params.depotId = depotId;
+  }
+  const rows = db.prepare(`SELECT parameter_type, severity, COUNT(*) c FROM alerts ${where} GROUP BY parameter_type, severity`).all(params);
+  const counts = {
+    NSD: { Warning: 0, Critical: 0 },
+    PRESSURE: { Warning: 0, Critical: 0 },
+    INSPECTION: { Warning: 0, Critical: 0 },
+    ROTATION: { Warning: 0, Critical: 0 },
+  };
+  for (const r of rows) {
+    if (!counts[r.parameter_type]) counts[r.parameter_type] = { Warning: 0, Critical: 0 };
+    counts[r.parameter_type][r.severity] = r.c;
+  }
+  return counts;
+}
+
+/**
+ * Lifecycle-stage KPI counts. With the simplified 6-status model these are
+ * mostly direct single-status counts (repair_queue = 'Under Repair',
+ * at_vendor = 'Under Retread', ...) -- "retreaded" is the one exception,
+ * kept as a lifetime event count rather than a status count, since a tyre
+ * only sits at 'Under Retread' while it's actually there; once it's back
+ * In Store that history would otherwise disappear from this KPI.
+ *
+ * @param {number|null} [depotId]
+ * @returns {object}
+ */
+function getLifecycleGroupCounts(depotId) {
+  const params = {};
+  let where = '';
+  if (depotId) {
+    where = 'WHERE current_depot_id = @depotId';
+    params.depotId = depotId;
+  }
+  const rows = db.prepare(`SELECT status, COUNT(*) c FROM tyres ${where} GROUP BY status`).all(params);
+  const byStatus = Object.fromEntries(rows.map((r) => [r.status, r.c]));
+
+  const retreadedParams = {};
+  let retreadedWhere = `WHERE e.event_type = 'retread_completed'`;
+  if (depotId) {
+    retreadedWhere += ' AND e.depot_id = @depotId';
+    retreadedParams.depotId = depotId;
+  }
+  const retreadedTotal = db.prepare(`SELECT COUNT(*) c FROM tyre_events e ${retreadedWhere}`).get(retreadedParams).c;
+
+  return {
+    repair_queue: byStatus['Under Repair'] || 0,
+    at_vendor: byStatus['Under Retread'] || 0,
+    retreaded_total: retreadedTotal,
+    warranty_pending: byStatus['Warranty'] || 0,
+    scrapped: byStatus['Scrapped'] || 0,
+  };
 }
 
 /**
@@ -273,6 +369,9 @@ function getNationalDashboard() {
   const tyreStatusCounts = getTyreStatusCounts();
   const activeAlertCounts = getActiveAlertCounts();
   const inspectionCounts = getInspectionCounts();
+  const rotationCounts = getRotationCounts();
+  const alertCountsByParameter = getAlertCountsByParameter();
+  const lifecycleGroupCounts = getLifecycleGroupCounts();
   const topFlaggedBuses = getTopFlaggedBuses(undefined, 10);
   const depotComplianceScores = getDepotComplianceScores();
 
@@ -292,7 +391,10 @@ function getNationalDashboard() {
     },
     tyre_status_counts: tyreStatusCounts,
     active_alert_counts: activeAlertCounts,
+    alert_counts_by_parameter: alertCountsByParameter,
     inspection_counts: inspectionCounts,
+    rotation_counts: rotationCounts,
+    lifecycle_group_counts: lifecycleGroupCounts,
     top_flagged_buses: topFlaggedBuses,
     depot_compliance_scores: depotComplianceScores,
   };
@@ -309,6 +411,9 @@ function getDepotDashboard(depotId) {
   const tyreStatusCounts = getTyreStatusCounts(depotId);
   const activeAlertCounts = getActiveAlertCounts(depotId);
   const inspectionCounts = getInspectionCounts(depotId);
+  const rotationCounts = getRotationCounts(depotId);
+  const alertCountsByParameter = getAlertCountsByParameter(depotId);
+  const lifecycleGroupCounts = getLifecycleGroupCounts(depotId);
   const busSummaries = getBusSummaries(depotId);
   const tyresInStore = getTyresInStoreWithAge(depotId);
   const upcomingInspections = getUpcomingInspections(depotId);
@@ -324,7 +429,10 @@ function getDepotDashboard(depotId) {
     },
     tyre_status_counts: tyreStatusCounts,
     active_alert_counts: activeAlertCounts,
+    alert_counts_by_parameter: alertCountsByParameter,
     inspection_counts: inspectionCounts,
+    rotation_counts: rotationCounts,
+    lifecycle_group_counts: lifecycleGroupCounts,
     bus_summaries: busSummaries,
     tyres_in_store: tyresInStore,
     upcoming_inspections: upcomingInspections,
@@ -336,6 +444,9 @@ module.exports = {
   getTyreStatusCounts,
   getActiveAlertCounts,
   getInspectionCounts,
+  getRotationCounts,
+  getAlertCountsByParameter,
+  getLifecycleGroupCounts,
   getTopFlaggedBuses,
   getDepotComplianceScores,
   getComplianceForDepot,

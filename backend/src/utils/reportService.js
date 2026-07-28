@@ -8,6 +8,7 @@ const db = require('../db');
 const { resolveThreshold } = require('./thresholdEngine');
 const { computeInspectionCompliance, listInServiceTyresWithLastReading } = require('./inspectionService');
 const { depotScopeClause, dateRangeClause, lastEventValueSql } = require('./reportQueryHelpers');
+const { ALL_STATUSES, EVENT_TYPES } = require('./tyreLifecycle');
 
 // ---------- 1. Tyre Status Report ----------
 
@@ -22,10 +23,11 @@ const { depotScopeClause, dateRangeClause, lastEventValueSql } = require('./repo
  * @returns {Array<object>} Flat array of tyre status report rows
  */
 function tyreStatusReport(filters) {
-  const { depot_id, bus_id, status } = filters;
+  const { depot_id, package_id, bus_id, status } = filters;
   const clauses = [];
   const params = {};
   depotScopeClause('t.current_depot_id', depot_id, clauses, params);
+  depotScopeClause('t.current_package_id', package_id, clauses, params, 'packageId');
   if (bus_id) {
     clauses.push('t.current_bus_id = @bus_id');
     params.bus_id = bus_id;
@@ -40,13 +42,14 @@ function tyreStatusReport(filters) {
     .prepare(`
       SELECT
         t.tyre_number, t.brand, t.status,
-        d.name AS depot_name, b.registration_no AS bus_registration_no, t.current_position,
+        d.name AS depot_name, p.name AS package_name, b.registration_no AS bus_registration_no, t.current_position,
         ${lastEventValueSql('nsd_reading', 'nsd_value')} AS last_nsd_value,
         ${lastEventValueSql('nsd_reading', 'event_date')} AS last_nsd_date,
         ${lastEventValueSql('pressure_reading', 'pressure_value')} AS last_pressure_value,
         ${lastEventValueSql('pressure_reading', 'event_date')} AS last_pressure_date
       FROM tyres t
       LEFT JOIN depots d ON d.id = t.current_depot_id
+      LEFT JOIN packages p ON p.id = t.current_package_id
       LEFT JOIN buses b ON b.id = t.current_bus_id
       ${where}
       ORDER BY t.tyre_number
@@ -315,13 +318,37 @@ function tyreLifeReport(filters) {
   dateRangeClause('t.purchase_date', from, to, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
+  // Excel Parity Gap-Closure: km-based "Life Used" per the Tyre Card sheet --
+  // the most recent fitment_created's odometer_km, compared against whichever
+  // odometer reading later ended that stint: a removal-type event
+  // (rotation/send_to_repair/send_to_store/condemnation/scrap/retread_sent)
+  // if one was logged with a reading, else the current bus's live odometer
+  // if the tyre is still mounted from that same fitment.
+  // Filters "after this fitment" by event id rather than event_date: SQLite's
+  // datetime('now') only has 1-second resolution, so a fitment immediately
+  // followed by its removal event in the same session can land in the same
+  // second -- id ordering (which always reflects true insertion order) stays
+  // correct even then.
+  const lastFitmentIdSql = `(SELECT e2.id FROM tyre_events e2 WHERE e2.tyre_id = t.id AND e2.event_type = 'fitment_created' ORDER BY e2.event_date DESC, e2.id DESC LIMIT 1)`;
+  const removalOdometerSql = `
+    (SELECT e.odometer_km FROM tyre_events e
+     WHERE e.tyre_id = t.id AND e.odometer_km IS NOT NULL
+       AND e.event_type IN ('rotation', 'send_to_repair', 'send_to_store', 'condemnation', 'scrap', 'retread_sent')
+       AND e.id > (${lastFitmentIdSql})
+     ORDER BY e.event_date ASC, e.id ASC LIMIT 1)
+  `;
+
   const rows = db
     .prepare(`
       SELECT
         t.tyre_number, t.brand, t.purchase_date, t.status, d.name AS depot_name,
-        ${lastEventValueSql('condemnation', 'event_date')} AS condemned_date
+        ${lastEventValueSql('condemnation', 'event_date')} AS condemned_date,
+        ${lastEventValueSql('fitment_created', 'odometer_km')} AS last_fitment_odometer_km,
+        ${removalOdometerSql} AS removal_odometer_km,
+        cb.odometer_km AS current_bus_odometer_km
       FROM tyres t
       LEFT JOIN depots d ON d.id = t.current_depot_id
+      LEFT JOIN buses cb ON cb.id = t.current_bus_id
       ${where}
       ORDER BY t.tyre_number
     `)
@@ -331,7 +358,14 @@ function tyreLifeReport(filters) {
     const start = r.purchase_date ? new Date(r.purchase_date) : null;
     const end = r.condemned_date ? new Date(r.condemned_date.replace(' ', 'T') + 'Z') : new Date();
     const daysInService = start ? Math.max(0, Math.floor((end - start) / (1000 * 60 * 60 * 24))) : null;
-    return { ...r, days_in_service: daysInService };
+
+    const endOdometerKm = r.removal_odometer_km ?? r.current_bus_odometer_km;
+    const lifeUsedKm = r.last_fitment_odometer_km != null && endOdometerKm != null && endOdometerKm >= r.last_fitment_odometer_km
+      ? endOdometerKm - r.last_fitment_odometer_km
+      : null;
+
+    const { last_fitment_odometer_km, removal_odometer_km, current_bus_odometer_km, ...rest } = r;
+    return { ...rest, days_in_service: daysInService, life_used_km: lifeUsedKm };
   });
 }
 
@@ -369,7 +403,7 @@ function inspectionComplianceReport(filters) {
 // ---------- 10. Condemned Tyres Report ----------
 function condemnedTyresReport(filters) {
   const { depot_id, from, to } = filters;
-  const clauses = [`t.status = 'Condemned'`];
+  const clauses = [`t.status = 'Scrapped'`];
   const params = {};
   depotScopeClause('t.current_depot_id', depot_id, clauses, params);
 
@@ -397,13 +431,141 @@ function condemnedTyresReport(filters) {
   });
 }
 
+// ---------- 11. Retread History Report ----------
+function retreadHistoryReport(filters) {
+  const { depot_id, from, to } = filters;
+  const clauses = [`e.event_type IN ('retread_sent', 'retread_completed')`];
+  const params = {};
+  depotScopeClause('e.depot_id', depot_id, clauses, params);
+  dateRangeClause('e.event_date', from, to, clauses, params);
+
+  return db
+    .prepare(`
+      SELECT
+        e.event_date, t.tyre_number, e.event_type, e.vendor_name, e.vendor_location, e.retread_cost,
+        e.gate_pass_no, e.invoice_no, e.invoice_date, e.retread_purpose, e.outcome,
+        e.reason, e.notes, d.name AS depot_name, u.username AS performed_by_username
+      FROM tyre_events e
+      JOIN tyres t ON t.id = e.tyre_id
+      LEFT JOIN depots d ON d.id = e.depot_id
+      LEFT JOIN users u ON u.id = e.performed_by
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY e.event_date DESC
+    `)
+    .all(params);
+}
+
+// ---------- 12. Warranty Claims Report ----------
+function warrantyClaimsReport(filters) {
+  const { depot_id, from, to } = filters;
+  const clauses = [`e.event_type = 'warranty_claim'`];
+  const params = {};
+  depotScopeClause('e.depot_id', depot_id, clauses, params);
+  dateRangeClause('e.event_date', from, to, clauses, params);
+
+  return db
+    .prepare(`
+      SELECT
+        e.event_date, t.tyre_number, t.status AS current_tyre_status, e.reason, e.notes,
+        e.vendor_name, e.vendor_location, e.gate_pass_no, e.invoice_no, e.invoice_date, e.approved_by,
+        d.name AS depot_name, u.username AS performed_by_username
+      FROM tyre_events e
+      JOIN tyres t ON t.id = e.tyre_id
+      LEFT JOIN depots d ON d.id = e.depot_id
+      LEFT JOIN users u ON u.id = e.performed_by
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY e.event_date DESC
+    `)
+    .all(params);
+}
+
+// ---------- 13. Scrap Analysis Report ----------
+function scrapAnalysisReport(filters) {
+  const { depot_id, from, to } = filters;
+  const clauses = [`e.event_type = 'scrap'`];
+  const params = {};
+  depotScopeClause('e.depot_id', depot_id, clauses, params);
+  dateRangeClause('e.event_date', from, to, clauses, params);
+
+  return db
+    .prepare(`
+      SELECT
+        e.event_date, t.tyre_number, t.brand, e.scrap_value, e.reason,
+        e.vendor_name, e.vendor_location, e.gate_pass_no, e.invoice_no, e.invoice_date, e.approved_by, e.store_manager,
+        d.name AS depot_name, u.username AS performed_by_username
+      FROM tyre_events e
+      JOIN tyres t ON t.id = e.tyre_id
+      LEFT JOIN depots d ON d.id = e.depot_id
+      LEFT JOIN users u ON u.id = e.performed_by
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY e.event_date DESC
+    `)
+    .all(params);
+}
+
+// ---------- 14. Wheel Alignment Report ----------
+function wheelAlignmentReport(filters) {
+  const { depot_id, bus_id, from, to } = filters;
+  const clauses = [];
+  const params = {};
+  depotScopeClause('wa.depot_id', depot_id, clauses, params);
+  if (bus_id) {
+    clauses.push('wa.bus_id = @bus_id');
+    params.bus_id = bus_id;
+  }
+  dateRangeClause('wa.alignment_date', from, to, clauses, params);
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  return db
+    .prepare(`
+      SELECT
+        wa.alignment_date, b.registration_no AS bus_registration_no, d.name AS depot_name,
+        wa.current_km, wa.due_date, wa.status, wa.remarks, u.username AS performed_by_username
+      FROM wheel_alignments wa
+      JOIN buses b ON b.id = wa.bus_id
+      LEFT JOIN depots d ON d.id = wa.depot_id
+      LEFT JOIN users u ON u.id = wa.performed_by
+      ${where}
+      ORDER BY wa.alignment_date DESC
+    `)
+    .all(params);
+}
+
+// ---------- 15. Stock Summary Report ----------
+// Excel Parity Gap-Closure: the practical, as-of-today version of the
+// sheet's "Tyre Summary" daily closing-stock grid -- current tyre counts by
+// status, grouped by depot/package. The full 31-day historical grid is
+// deliberately not reconstructed here; the tyre-history report / audit log
+// already provide full history if it's ever needed.
+function stockSummaryReport(filters) {
+  const { depot_id, package_id } = filters;
+  const clauses = [];
+  const params = {};
+  depotScopeClause('t.current_depot_id', depot_id, clauses, params);
+  depotScopeClause('t.current_package_id', package_id, clauses, params, 'packageId');
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  return db
+    .prepare(`
+      SELECT d.name AS depot_name, p.name AS package_name, t.status, COUNT(*) AS tyre_count
+      FROM tyres t
+      LEFT JOIN depots d ON d.id = t.current_depot_id
+      LEFT JOIN packages p ON p.id = t.current_package_id
+      ${where}
+      GROUP BY t.current_depot_id, t.current_package_id, t.status
+      ORDER BY d.name, p.name, t.status
+    `)
+    .all(params);
+}
+
 const REPORTS = {
   'tyre-status': {
     name: 'Tyre Status Report',
     filters: [
       { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'package_id', label: 'Package', type: 'package' },
       { key: 'bus_id', label: 'Bus', type: 'bus' },
-      { key: 'status', label: 'Status', type: 'select', options: ['In Service', 'In Store', 'Under Repair', 'Condemned'] },
+      { key: 'status', label: 'Status', type: 'select', options: ALL_STATUSES },
       { key: 'from', label: 'From', type: 'date' },
       { key: 'to', label: 'To', type: 'date' },
     ],
@@ -412,6 +574,7 @@ const REPORTS = {
       { key: 'brand', label: 'Brand' },
       { key: 'status', label: 'Status' },
       { key: 'depot_name', label: 'Depot' },
+      { key: 'package_name', label: 'Package' },
       { key: 'bus_registration_no', label: 'Bus' },
       { key: 'current_position', label: 'Position' },
       { key: 'last_nsd_value', label: 'Last NSD (mm)' },
@@ -446,7 +609,7 @@ const REPORTS = {
     name: 'Tyre History Report',
     filters: [
       { key: 'tyre_number', label: 'Tyre Number', type: 'text', required: true },
-      { key: 'event_type', label: 'Event Type', type: 'select', options: ['nsd_reading', 'pressure_reading', 'rotation', 'replacement', 'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation'] },
+      { key: 'event_type', label: 'Event Type', type: 'select', options: EVENT_TYPES },
       { key: 'from', label: 'From', type: 'date' },
       { key: 'to', label: 'To', type: 'date' },
     ],
@@ -560,6 +723,7 @@ const REPORTS = {
       { key: 'status', label: 'Status' },
       { key: 'condemned_date', label: 'Condemned Date' },
       { key: 'days_in_service', label: 'Days in Service' },
+      { key: 'life_used_km', label: 'Life Used (km)' },
     ],
     getRows: tyreLifeReport,
   },
@@ -596,6 +760,113 @@ const REPORTS = {
       { key: 'authorised_by_username', label: 'Authorised By' },
     ],
     getRows: condemnedTyresReport,
+  },
+  'retread-history': {
+    name: 'Retread History Report',
+    filters: [
+      { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'from', label: 'From', type: 'date' },
+      { key: 'to', label: 'To', type: 'date' },
+    ],
+    columns: [
+      { key: 'event_date', label: 'Date' },
+      { key: 'tyre_number', label: 'Tyre Number' },
+      { key: 'event_type', label: 'Event' },
+      { key: 'vendor_name', label: 'Vendor' },
+      { key: 'vendor_location', label: 'Vendor Location' },
+      { key: 'gate_pass_no', label: 'Gate Pass No.' },
+      { key: 'invoice_no', label: 'Invoice No.' },
+      { key: 'invoice_date', label: 'Invoice Date' },
+      { key: 'retread_cost', label: 'Retread Cost' },
+      { key: 'retread_purpose', label: 'Purpose' },
+      { key: 'outcome', label: 'Outcome' },
+      { key: 'depot_name', label: 'Depot' },
+      { key: 'reason', label: 'Reason' },
+      { key: 'performed_by_username', label: 'Performed By' },
+    ],
+    getRows: retreadHistoryReport,
+  },
+  'warranty-claims': {
+    name: 'Warranty Claims Report',
+    filters: [
+      { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'from', label: 'From', type: 'date' },
+      { key: 'to', label: 'To', type: 'date' },
+    ],
+    columns: [
+      { key: 'event_date', label: 'Date' },
+      { key: 'tyre_number', label: 'Tyre Number' },
+      { key: 'current_tyre_status', label: 'Current Status' },
+      { key: 'vendor_name', label: 'Vendor' },
+      { key: 'vendor_location', label: 'Vendor Location' },
+      { key: 'gate_pass_no', label: 'Gate Pass No.' },
+      { key: 'invoice_no', label: 'Invoice No.' },
+      { key: 'invoice_date', label: 'Invoice Date' },
+      { key: 'approved_by', label: 'Approved By' },
+      { key: 'depot_name', label: 'Depot' },
+      { key: 'reason', label: 'Reason / Outcome' },
+      { key: 'performed_by_username', label: 'Performed By' },
+    ],
+    getRows: warrantyClaimsReport,
+  },
+  'scrap-analysis': {
+    name: 'Scrap Analysis Report',
+    filters: [
+      { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'from', label: 'From', type: 'date' },
+      { key: 'to', label: 'To', type: 'date' },
+    ],
+    columns: [
+      { key: 'event_date', label: 'Date' },
+      { key: 'tyre_number', label: 'Tyre Number' },
+      { key: 'brand', label: 'Brand' },
+      { key: 'scrap_value', label: 'Scrap Value' },
+      { key: 'vendor_name', label: 'Vendor' },
+      { key: 'vendor_location', label: 'Vendor Location' },
+      { key: 'gate_pass_no', label: 'Gate Pass No.' },
+      { key: 'invoice_no', label: 'Invoice No.' },
+      { key: 'invoice_date', label: 'Invoice Date' },
+      { key: 'approved_by', label: 'Approved By' },
+      { key: 'store_manager', label: 'Store Manager' },
+      { key: 'depot_name', label: 'Depot' },
+      { key: 'reason', label: 'Reason' },
+      { key: 'performed_by_username', label: 'Performed By' },
+    ],
+    getRows: scrapAnalysisReport,
+  },
+  'wheel-alignment': {
+    name: 'Wheel Alignment Report',
+    filters: [
+      { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'bus_id', label: 'Bus', type: 'bus' },
+      { key: 'from', label: 'From', type: 'date' },
+      { key: 'to', label: 'To', type: 'date' },
+    ],
+    columns: [
+      { key: 'alignment_date', label: 'Date' },
+      { key: 'bus_registration_no', label: 'Bus' },
+      { key: 'depot_name', label: 'Depot' },
+      { key: 'current_km', label: 'Current KM' },
+      { key: 'due_date', label: 'Due Date' },
+      { key: 'status', label: 'Status' },
+      { key: 'remarks', label: 'Remarks' },
+      { key: 'performed_by_username', label: 'Performed By' },
+    ],
+    getRows: wheelAlignmentReport,
+  },
+  'stock-summary': {
+    name: 'Stock Summary Report',
+    filters: [
+      { key: 'depot_id', label: 'Depot', type: 'depot' },
+      { key: 'package_id', label: 'Package', type: 'package' },
+    ],
+    columns: [
+      { key: 'depot_name', label: 'Depot' },
+      { key: 'package_name', label: 'Package' },
+      { key: 'status', label: 'Status' },
+      { key: 'tyre_count', label: 'Tyre Count' },
+    ],
+    getRows: stockSummaryReport,
   },
 };
 

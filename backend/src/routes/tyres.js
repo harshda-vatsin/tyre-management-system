@@ -10,6 +10,10 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
 const { buildTyreCardPdf } = require('../utils/exportService');
+const { createTyreEvent } = require('../utils/tyreEvents');
+const { assertValidTransition } = require('../utils/lifecycleStateMachine');
+const { TERMINAL_STATUSES } = require('../utils/tyreLifecycle');
+const { ApiError } = require('../utils/apiError');
 
 const router = express.Router();
 
@@ -21,9 +25,11 @@ const SELECT_TYRE = `
   SELECT
     t.*,
     d.name AS depot_name, d.code AS depot_code,
+    p.name AS package_name, p.code AS package_code,
     b.registration_no AS bus_registration_no
   FROM tyres t
   LEFT JOIN depots d ON d.id = t.current_depot_id
+  LEFT JOIN packages p ON p.id = t.current_package_id
   LEFT JOIN buses b ON b.id = t.current_bus_id
 `;
 
@@ -120,7 +126,11 @@ function validatePosition({ current_bus_id, current_position, excludeTyreId }) {
 }
 
 router.post('/', authorize(...WRITE_ROLES), (req, res) => {
-  const { tyre_number, brand, model, size, purchase_date, initial_nsd, status, current_bus_id, current_position, current_depot_id } = req.body || {};
+  const {
+    tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status,
+    current_bus_id, current_position, current_depot_id,
+    vendor_name, gate_pass_no, invoice_no, invoice_date,
+  } = req.body || {};
 
   if (!tyre_number || !brand) {
     return res.status(400).json({ error: 'tyre_number and brand are required' });
@@ -135,30 +145,51 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
   }
 
   try {
-    const info = db
-      .prepare(`
-        INSERT INTO tyres (tyre_number, brand, model, size, purchase_date, initial_nsd, status, current_bus_id, current_position, current_depot_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        tyre_number,
-        brand,
-        model || null,
-        size || null,
-        purchase_date || null,
-        initial_nsd ?? null,
-        status || 'In Store',
-        current_bus_id || null,
-        current_position || null,
-        resolvedDepotId
-      );
+    // Wrapped in a transaction so the tyre row and its opening lifecycle
+    // event (purchase_intake) are never created independently of each other
+    // -- tyre creation is no longer silent.
+    const created = db.transaction(() => {
+      const info = db
+        .prepare(`
+          INSERT INTO tyres (tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status, current_bus_id, current_position, current_depot_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          tyre_number,
+          brand,
+          model || null,
+          size || null,
+          pattern || null,
+          ply_rating || null,
+          purchase_date || null,
+          initial_nsd ?? null,
+          purchase_cost ?? null,
+          status || 'In Store',
+          current_bus_id || null,
+          current_position || null,
+          resolvedDepotId
+        );
 
-    const created = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(info.lastInsertRowid);
-    writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'tyre', entityId: created.id, after: created });
+      const row = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(info.lastInsertRowid);
+      writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'tyre', entityId: row.id, after: row });
+      createTyreEvent(req.user, 'purchase_intake', {
+        tyre_id: row.id,
+        notes: 'Tyre record created',
+        vendor_name: vendor_name || null,
+        gate_pass_no: gate_pass_no || null,
+        invoice_no: invoice_no || null,
+        invoice_date: invoice_date || null,
+      });
+      return row;
+    })();
+
     res.status(201).json(created);
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A tyre with this tyre number already exists' });
+    }
+    if (err instanceof ApiError) {
+      return res.status(err.status).json({ error: err.message });
     }
     throw err;
   }
@@ -176,6 +207,8 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   const brand = req.body?.brand ?? before.brand;
   const model = req.body?.model ?? before.model;
   const size = req.body?.size ?? before.size;
+  const pattern = req.body?.pattern ?? before.pattern;
+  const ply_rating = req.body?.ply_rating ?? before.ply_rating;
   const purchase_date = req.body?.purchase_date ?? before.purchase_date;
   const initial_nsd = req.body?.initial_nsd ?? before.initial_nsd;
   const status = req.body?.status ?? before.status;
@@ -192,13 +225,30 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
     return res.status(403).json({ error: 'Not authorized to move this tyre to that depot/bus' });
   }
 
+  // This route remains the master-data correction endpoint (used by admin
+  // edits and CSV bulk import), not a lifecycle-event path -- it does not
+  // create a tyre_events row. It gets one targeted guard, though: a
+  // terminal-status tyre (Condemned/Scrapped/Disposed/Archived) can never be
+  // moved to a different status here, and can never be silently mounted onto
+  // a bus even if the status field itself is left unchanged in the request.
+  try {
+    if (status !== before.status) {
+      assertValidTransition(before.status, status);
+    } else if (TERMINAL_STATUSES.includes(before.status) && current_bus_id) {
+      throw new ApiError(409, `A "${before.status}" tyre cannot be mounted on a bus`);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
   try {
     db.prepare(`
       UPDATE tyres
-      SET tyre_number = ?, brand = ?, model = ?, size = ?, purchase_date = ?, initial_nsd = ?, status = ?,
+      SET tyre_number = ?, brand = ?, model = ?, size = ?, pattern = ?, ply_rating = ?, purchase_date = ?, initial_nsd = ?, status = ?,
           current_bus_id = ?, current_position = ?, current_depot_id = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(tyre_number, brand, model, size, purchase_date, initial_nsd, status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
+    `).run(tyre_number, brand, model, size, pattern || null, ply_rating || null, purchase_date, initial_nsd, status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A tyre with this tyre number already exists' });

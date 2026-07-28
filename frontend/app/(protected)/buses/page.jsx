@@ -42,7 +42,7 @@ function normalizeCode(value) {
 
 function emptyForm(defaultDepotId) {
   return {
-    registration_no: '', chassis_no: '', bus_model_id: '', depot_id: defaultDepotId || '',
+    registration_no: '', chassis_no: '', bus_model_id: '', depot_id: defaultDepotId || '', package_id: '',
     year_of_manufacture: '', date_of_entry_into_fleet: '', status: 'Active',
   };
 }
@@ -63,6 +63,7 @@ export default function BusesPage() {
   const [filters, setFilters] = useState({ status: '', depot_id: '', bus_model_id: '' });
 
   const [depots, setDepots] = useState([]);
+  const [packages, setPackages] = useState([]);
   const [models, setModels] = useState([]);
   const [form, setForm] = useState(emptyForm(user?.depot_id));
   const [editingId, setEditingId] = useState(null);
@@ -78,8 +79,9 @@ export default function BusesPage() {
   const [newModelError, setNewModelError] = useState('');
 
   async function loadLookups() {
-    const [d, m] = await Promise.all([api.get('/depots'), api.get('/bus-models')]);
+    const [d, p, m] = await Promise.all([api.get('/depots'), api.get('/packages'), api.get('/bus-models')]);
     setDepots(d);
+    setPackages(p);
     setModels(m);
   }
 
@@ -123,6 +125,7 @@ export default function BusesPage() {
       chassis_no: bus.chassis_no,
       bus_model_id: bus.bus_model_id,
       depot_id: bus.depot_id,
+      package_id: bus.package_id || '',
       year_of_manufacture: bus.year_of_manufacture || '',
       date_of_entry_into_fleet: bus.date_of_entry_into_fleet || '',
       status: bus.status,
@@ -149,6 +152,7 @@ export default function BusesPage() {
         chassis_no: normalizeCode(form.chassis_no),
         bus_model_id: Number(form.bus_model_id),
         depot_id: Number(form.depot_id),
+        package_id: form.package_id ? Number(form.package_id) : null,
       };
       if (editingId) {
         payload.odometer_km = form.odometer_km;
@@ -369,6 +373,13 @@ export default function BusesPage() {
               >
                 <option value="">Select depot</option>
                 {depots.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Package</label>
+              <select value={form.package_id} onChange={(e) => setForm({ ...form, package_id: e.target.value })}>
+                <option value="">No package</option>
+                {packages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
             <div className="field">

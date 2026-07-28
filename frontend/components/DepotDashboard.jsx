@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Bus, CircleDot, AlertTriangle, ShieldCheck, PartyPopper } from 'lucide-react';
+import { Bus, CircleDot, AlertTriangle, ShieldCheck, PartyPopper, Wrench, Truck, RefreshCw, RotateCw, FileWarning, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { formatDateTime } from '../lib/dates.js';
 import StatCard from './StatCard.jsx';
 import BarChart from './BarChart.jsx';
 import PageHeader from './PageHeader.jsx';
@@ -11,6 +12,10 @@ import EmptyState from './EmptyState.jsx';
 import LoadingState from './LoadingState.jsx';
 import { TYRE_STATUS_COLORS, ALERT_SEVERITY_COLORS } from '../lib/dashboardColors.js';
 import { SeverityBadge } from './AlertBadges.jsx';
+
+function inServiceCount(tyreCounts) {
+  return (tyreCounts || {})['Active'] || 0;
+}
 
 export default function DepotDashboard({ depotId, onBack }) {
   const [data, setData] = useState(null);
@@ -55,6 +60,17 @@ export default function DepotDashboard({ depotId, onBack }) {
         <StatCard label="Tyres" value={data.fleet_health.total_tyres} accent="#1baf7a" icon={CircleDot} />
         <StatCard label="Active Alerts" value={data.fleet_health.active_alerts} accent="#b3261e" icon={AlertTriangle} />
         <StatCard label="Compliance" value={`${data.fleet_health.compliance_pct}%`} sublabel={`${data.compliance.compliant_buses}/${data.compliance.total_buses} buses up to date`} accent="#1a7f37" icon={ShieldCheck} />
+      </div>
+
+      <div className="stat-grid">
+        <StatCard label="Repair Queue" value={data.lifecycle_group_counts.repair_queue} accent="#eda100" icon={Wrench} />
+        <StatCard label="At Retread Vendor" value={data.lifecycle_group_counts.at_vendor} accent="#eda100" icon={Truck} />
+        <StatCard label="Retreaded (Lifetime)" value={data.lifecycle_group_counts.retreaded_total} accent="#1baf7a" icon={RefreshCw} />
+        <StatCard label="Rotation Due/Overdue" value={data.rotation_counts.due + data.rotation_counts.overdue} accent="#eda100" icon={RotateCw} />
+        <StatCard label="NSD Critical" value={data.alert_counts_by_parameter.NSD.Critical} accent="#e34948" icon={AlertTriangle} />
+        <StatCard label="Pressure Critical" value={data.alert_counts_by_parameter.PRESSURE.Critical} accent="#e34948" icon={AlertTriangle} />
+        <StatCard label="Warranty Pending" value={data.lifecycle_group_counts.warranty_pending} accent="#1d4ed8" icon={FileWarning} />
+        <StatCard label="Scrapped" value={data.lifecycle_group_counts.scrapped} accent="#b3261e" icon={Trash2} />
       </div>
 
       <div className="grid-2col">
@@ -102,7 +118,7 @@ export default function DepotDashboard({ depotId, onBack }) {
                     <td>{a.parameter_type}</td>
                     <td><Link href={`/tyres/${a.tyre_id}`}>{a.tyre_number}</Link></td>
                     <td>{a.bus_registration_no || '-'}</td>
-                    <td>{a.opened_at}</td>
+                    <td>{formatDateTime(a.opened_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -136,7 +152,7 @@ export default function DepotDashboard({ depotId, onBack }) {
                     <td><Link href={`/buses/${b.id}`}>{b.registration_no}</Link></td>
                     <td>{b.model_name}</td>
                     <td><span className="badge">{b.status}</span></td>
-                    <td>{b.tyre_counts['In Service'] || 0}</td>
+                    <td>{inServiceCount(b.tyre_counts)}</td>
                     <td>{b.flagged_count > 0 ? <span className="badge badge-critical">{b.flagged_count}</span> : 0}</td>
                   </tr>
                 ))}

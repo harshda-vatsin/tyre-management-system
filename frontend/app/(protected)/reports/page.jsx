@@ -3,12 +3,24 @@
 import React, { useEffect, useState } from 'react';
 import { FileDown, FileSpreadsheet, Play } from 'lucide-react';
 import { api, downloadFile } from '../../../lib/api.js';
+import { formatDateTime } from '../../../lib/dates.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import { FLEET_WIDE_ROLES } from '../../../lib/roles.js';
 import Pagination from '../../../components/Pagination.jsx';
 import PageHeader from '../../../components/PageHeader.jsx';
 import EmptyState from '../../../components/EmptyState.jsx';
 import LoadingState from '../../../components/LoadingState.jsx';
+
+// Report column schemas don't carry a type flag, but every timestamp column
+// across all 13 reports already follows this key-naming convention
+// (event_date, condemned_date, opened_at, last_reading_date, ...), so it's a
+// safe, low-risk way to route just the date-bearing cells through the
+// shared IST formatter without touching the backend report registry.
+function formatReportCell(key, value) {
+  if (value == null || value === '') return '-';
+  if (/_date$|_at$/.test(key)) return formatDateTime(value);
+  return value;
+}
 
 function buildQueryString(filters, extra = {}) {
   const params = new URLSearchParams();
@@ -25,6 +37,7 @@ export default function ReportsPage() {
   const [reports, setReports] = useState([]);
   const [selectedKey, setSelectedKey] = useState('');
   const [depots, setDepots] = useState([]);
+  const [packages, setPackages] = useState([]);
   const [buses, setBuses] = useState([]);
 
   const [filterValues, setFilterValues] = useState({});
@@ -41,6 +54,7 @@ export default function ReportsPage() {
       if (data.length) setSelectedKey(data[0].key);
     });
     api.get('/depots').then(setDepots).catch(() => {});
+    api.get('/packages').then(setPackages).catch(() => {});
     api.get('/buses?pageSize=200').then((r) => setBuses(r.data)).catch(() => {});
   }, []);
 
@@ -94,6 +108,14 @@ export default function ReportsPage() {
         <select value={filterValues[f.key] || ''} onChange={(e) => setFilter(f.key, e.target.value)}>
           <option value="">All</option>
           {depots.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      );
+    }
+    if (f.type === 'package') {
+      return (
+        <select value={filterValues[f.key] || ''} onChange={(e) => setFilter(f.key, e.target.value)}>
+          <option value="">All</option>
+          {packages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       );
     }
@@ -191,7 +213,7 @@ export default function ReportsPage() {
                       <tbody>
                         {result.data.map((row, i) => (
                           <tr key={i}>
-                            {selectedReport.columns.map((c) => <td key={c.key}>{row[c.key] ?? '-'}</td>)}
+                            {selectedReport.columns.map((c) => <td key={c.key}>{formatReportCell(c.key, row[c.key])}</td>)}
                           </tr>
                         ))}
                       </tbody>

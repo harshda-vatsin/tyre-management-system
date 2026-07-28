@@ -56,7 +56,9 @@ export default function NotificationBell() {
       if (diffMins < 1) return 'just now';
       if (diffMins < 60) return `${diffMins}m ago`;
       if (diffHrs < 24) return `${diffHrs}h ago`;
-      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      // Beyond a day, show an absolute date fixed to IST rather than the
+      // viewing browser's own local timezone.
+      return d.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' });
     } catch (e) {
       return dateStr;
     }

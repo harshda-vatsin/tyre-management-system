@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../../lib/api.js';
 import { FLEET_WIDE_ROLES } from '../../../lib/roles.js';
+import { formatDateTime } from '../../../lib/dates.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import Pagination from '../../../components/Pagination.jsx';
 import PageHeader from '../../../components/PageHeader.jsx';
@@ -35,13 +36,6 @@ const ACTION_BADGE = {
   TRANSFER: 'badge-info',
   AMEND_EVENT: 'badge-warning',
 };
-
-function formatDate(value) {
-  if (!value) return '-';
-  const d = new Date(value.includes(' ') && !value.includes('T') ? value.replace(' ', 'T') + 'Z' : value);
-  if (isNaN(d.getTime())) return value;
-  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
 
 export default function AuditLogPage() {
   const { user } = useAuth();
@@ -492,7 +486,7 @@ export default function AuditLogPage() {
                       style={{ cursor: 'pointer' }}
                     >
                       <td style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>#{log.id}</td>
-                      <td>{formatDate(log.created_at)}</td>
+                      <td>{formatDateTime(log.created_at)}</td>
                       <td style={{ fontWeight: 500 }}>{log.username}</td>
                       <td>
                         <span className={`badge ${ACTION_BADGE[log.action] || ''}`}>
@@ -518,7 +512,7 @@ export default function AuditLogPage() {
                   </div>
                   <div className="mobile-card-row">
                     <span className="mobile-card-label">Date / Time</span>
-                    <span className="mobile-card-value">{formatDate(log.created_at)}</span>
+                    <span className="mobile-card-value">{formatDateTime(log.created_at)}</span>
                   </div>
                   <div className="mobile-card-row">
                     <span className="mobile-card-label">Person</span>
@@ -556,7 +550,7 @@ export default function AuditLogPage() {
           {/* Metadata Section */}
           <div className="form-section-title">Activity Metadata</div>
           <div className="detail-grid" style={{ marginBottom: '1.25rem', gap: '0.75rem 1.5rem' }}>
-            <div><div className="detail-label">Date & Time</div><div className="detail-value">{formatDate(viewEntry.created_at)}</div></div>
+            <div><div className="detail-label">Date & Time</div><div className="detail-value">{formatDateTime(viewEntry.created_at)}</div></div>
             <div><div className="detail-label">Person who made the change</div><div className="detail-value">{viewEntry.username} <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>· User ID {viewEntry.user_id || 'system'}</span></div></div>
             <div><div className="detail-label">Activity</div><div className="detail-value"><span className={`badge ${ACTION_BADGE[viewEntry.action] || ''}`}>{ACTION_LABELS[viewEntry.action] || viewEntry.action}</span></div></div>
             <div><div className="detail-label">Changed item type</div><div className="detail-value">{viewEntry.entityLabel}</div></div>

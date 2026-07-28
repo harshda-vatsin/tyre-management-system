@@ -7,3 +7,18 @@ backend/data/*.sqlite
 backend/data/*.sqlite-journal
 backend/data/*.sqlite-shm
 backend/data/*.sqlite-wal
+backend/data/*.bak
+backend/data/*.bak-shm
+backend/data/*.bak-wal
+
+# Scratch scripts that hardcode credentials against a live deployed instance
+# (tms.alturaworkspace.com) -- never track these.
+backend/scratch/query_all_prod.py
+backend/scratch/query_prod_alerts.py
+backend/scratch/query_prod_audit.py
+backend/scratch/query_prod_events.py
+backend/scratch/query_prod_inspection.py
+backend/scratch/query_prod_thresholds.py
+backend/scratch/query_dm_alerts.py
+backend/scratch/test_post_bad_reading.py
+backend/scratch/test_trigger_inspection.py

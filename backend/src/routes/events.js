@@ -140,16 +140,17 @@ router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
 
   try {
     for (const reading of readings) {
-      const { tyre_id, nsd_value, pressure_value } = reading;
+      const { tyre_id, nsd_value, nsd_g1, nsd_g2, nsd_g3, nsd_g4, pressure_value } = reading;
       if (!tyre_id) {
         errors.push({ tyre_id: null, error: 'tyre_id is required for each reading' });
         continue;
       }
-      if (nsd_value === undefined && pressure_value === undefined) continue;
+      const hasGrooveValue = [nsd_g1, nsd_g2, nsd_g3, nsd_g4].some((v) => v !== undefined && v !== null && v !== '');
+      if (nsd_value === undefined && pressure_value === undefined && !hasGrooveValue) continue;
 
       try {
-        if (nsd_value !== undefined && nsd_value !== null && nsd_value !== '') {
-          created.push(...createTyreEvent(req.user, 'nsd_reading', { tyre_id, nsd_value, event_date }));
+        if ((nsd_value !== undefined && nsd_value !== null && nsd_value !== '') || hasGrooveValue) {
+          created.push(...createTyreEvent(req.user, 'nsd_reading', { tyre_id, nsd_value, nsd_g1, nsd_g2, nsd_g3, nsd_g4, event_date }));
         }
         if (pressure_value !== undefined && pressure_value !== null && pressure_value !== '') {
           created.push(...createTyreEvent(req.user, 'pressure_reading', { tyre_id, pressure_value, event_date }));
@@ -167,6 +168,45 @@ router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
   }
 
   // Returns 201 if at least one event was successfully logged, otherwise returns 400
+  res.status(created.length ? 201 : 400).json({ created, errors });
+});
+
+// Excel Parity Gap-Closure: rotates every tyre on one bus in a single
+// session (the Excel's "Tyre Rotation" sheet swaps up to 6 positions at
+// once, each with its own NSD), instead of one rotation event at a time.
+// Mirrors /batch above exactly: delegates to the existing createTyreEvent
+// per tyre, one bad row doesn't roll back the others.
+router.post('/batch-rotation', authorize(...WRITE_ROLES), (req, res) => {
+  const { bus_id, event_date, odometer_km, rotations } = req.body || {};
+  if (!bus_id || !Array.isArray(rotations) || rotations.length === 0) {
+    return res.status(400).json({ error: 'bus_id and a non-empty rotations array are required' });
+  }
+
+  const created = [];
+  const errors = [];
+
+  try {
+    for (const rotation of rotations) {
+      const { tyre_id, to_position, nsd_value, reason } = rotation;
+      if (!tyre_id || !to_position) {
+        errors.push({ tyre_id: tyre_id || null, error: 'tyre_id and to_position are required for each rotation' });
+        continue;
+      }
+
+      try {
+        created.push(...createTyreEvent(req.user, 'rotation', { tyre_id, to_position, nsd_value, reason, odometer_km, event_date }));
+      } catch (err) {
+        if (err instanceof ApiError) {
+          errors.push({ tyre_id, error: err.message });
+        } else {
+          throw err;
+        }
+      }
+    }
+  } catch (err) {
+    return handleEventError(err, res);
+  }
+
   res.status(created.length ? 201 : 400).json({ created, errors });
 });
 

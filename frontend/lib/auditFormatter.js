@@ -4,6 +4,8 @@
  * maps database field names to labels, translates codes/constants, and generates change summaries.
  */
 
+import { EVENT_TYPE_LABELS } from './tyreLifecycle.js';
+
 export const POSITION_MAP = {
   FL: 'Front Left',
   FR: 'Front Right',
@@ -15,16 +17,9 @@ export const POSITION_MAP = {
   RRI: 'Rear Right Inner',
 };
 
-export const EVENT_TYPE_MAP = {
-  nsd_reading: 'NSD Reading',
-  pressure_reading: 'Pressure Reading',
-  rotation: 'Tyre Rotation',
-  replacement: 'Tyre Replacement',
-  puncture_repair: 'Puncture Repair',
-  inter_bus_transfer: 'Inter-Bus Transfer',
-  send_to_store: 'Sending to Store',
-  condemnation: 'Condemnation',
-};
+// Kept as a re-exported alias (rather than renaming every call site) --
+// single source is now lib/tyreLifecycle.js's EVENT_TYPE_LABELS.
+export const EVENT_TYPE_MAP = EVENT_TYPE_LABELS;
 
 export const ACTION_LABELS = {
   CREATE: 'Created',
@@ -87,6 +82,13 @@ export const FIELD_LABELS = {
   notes: 'Notes',
   stored_at: 'Stored At',
   odometer_km: 'Odometer (km)',
+  purchase_cost: 'Purchase Cost',
+  repair_cost: 'Repair Cost',
+  retread_cost: 'Retread Cost',
+  scrap_value: 'Scrap Value',
+  vendor_name: 'Vendor',
+  outcome: 'Outcome',
+  to_status: 'To Status',
 };
 
 export function humanizePosition(pos) {

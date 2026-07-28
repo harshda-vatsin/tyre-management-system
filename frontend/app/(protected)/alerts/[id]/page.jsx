@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '../../../../lib/api.js';
+import { formatDateTime } from '../../../../lib/dates.js';
 import { useAuth } from '../../../../components/AuthContext.jsx';
 import { ROLES } from '../../../../lib/roles.js';
 import Modal from '../../../../components/Modal.jsx';
@@ -79,15 +80,15 @@ export default function AlertDetailPage() {
           <div><div className="detail-label">Severity</div><div className="detail-value"><SeverityBadge severity={alert.severity} /> <EscalatedBadge isEscalated={alert.is_escalated} /></div></div>
           <div><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={alert.status} /></div></div>
           <div><div className="detail-label">Age</div><div className="detail-value">{alert.age_days} days</div></div>
-          <div><div className="detail-label">Source Reading</div><div className="detail-value">{alert.reading_value ?? '-'} (threshold: {alert.threshold_value ?? '-'}){alert.triggering_event_date ? ` on ${alert.triggering_event_date}` : ''}</div></div>
+          <div><div className="detail-label">Source Reading</div><div className="detail-value">{alert.reading_value ?? '-'} (threshold: {alert.threshold_value ?? '-'}){alert.triggering_event_date ? ` on ${formatDateTime(alert.triggering_event_date)}` : ''}</div></div>
           <div><div className="detail-label">Tyre</div><div className="detail-value"><Link href={`/tyres/${alert.tyre_id}`}>{alert.tyre_number}</Link></div></div>
           <div><div className="detail-label">Bus</div><div className="detail-value">{alert.bus_id ? <Link href={`/buses/${alert.bus_id}`}>{alert.bus_registration_no}</Link> : '-' }</div></div>
           <div><div className="detail-label">Depot</div><div className="detail-value">{alert.depot_name || '-'}</div></div>
-          <div><div className="detail-label">Opened</div><div className="detail-value">{alert.opened_at}</div></div>
-          {alert.acknowledged_at && <div><div className="detail-label">Acknowledged</div><div className="detail-value">{alert.acknowledged_at} by {alert.acknowledged_by_username}</div></div>}
-          {alert.resolved_at && <div><div className="detail-label">Resolved</div><div className="detail-value">{alert.resolved_at} by {alert.resolved_by_username || 'System'}</div></div>}
+          <div><div className="detail-label">Opened</div><div className="detail-value">{formatDateTime(alert.opened_at)}</div></div>
+          {alert.acknowledged_at && <div><div className="detail-label">Acknowledged</div><div className="detail-value">{formatDateTime(alert.acknowledged_at)} by {alert.acknowledged_by_username}</div></div>}
+          {alert.resolved_at && <div><div className="detail-label">Resolved</div><div className="detail-value">{formatDateTime(alert.resolved_at)} by {alert.resolved_by_username || 'System'}</div></div>}
           {alert.resolution_note && <div><div className="detail-label">Resolution Note</div><div className="detail-value">{alert.resolution_note}</div></div>}
-          {alert.escalated_at && <div><div className="detail-label">Escalated At</div><div className="detail-value">{alert.escalated_at}</div></div>}
+          {alert.escalated_at && <div><div className="detail-label">Escalated At</div><div className="detail-value">{formatDateTime(alert.escalated_at)}</div></div>}
         </div>
         {error && <div className="error-text" style={{ marginTop: '0.75rem' }}>{error}</div>}
       </div>

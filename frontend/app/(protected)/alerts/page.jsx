@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { AlertTriangle, Clock, CheckCircle2, Flame } from 'lucide-react';
 import { api } from '../../../lib/api.js';
+import { formatDateTime } from '../../../lib/dates.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
 import FilterBar from '../../../components/FilterBar.jsx';
@@ -22,6 +23,7 @@ const PARAMETER_OPTIONS = [
   { value: 'NSD', label: 'NSD' },
   { value: 'PRESSURE', label: 'Pressure' },
   { value: 'INSPECTION', label: 'Inspection' },
+  { value: 'ROTATION', label: 'Rotation' },
 ];
 
 export default function AlertsPage() {
@@ -356,7 +358,7 @@ export default function AlertsPage() {
               <div><div className="detail-label">Bus</div><div className="detail-value">{detailAlert.bus_registration_no || '-'}</div></div>
               <div><div className="detail-label">Depot</div><div className="detail-value">{detailAlert.depot_name || '-'}</div></div>
               <div><div className="detail-label">Reading / Threshold</div><div className="detail-value">{detailAlert.reading_value ?? '-'} / {detailAlert.threshold_value ?? '-'}</div></div>
-              <div><div className="detail-label">Resolved At</div><div className="detail-value">{detailAlert.resolved_at || '-'}</div></div>
+              <div><div className="detail-label">Resolved At</div><div className="detail-value">{detailAlert.resolved_at ? formatDateTime(detailAlert.resolved_at) : '-'}</div></div>
               <div><div className="detail-label">Resolved By</div><div className="detail-value">{detailAlert.resolved_at ? (detailAlert.resolved_by_username || 'System') : '-'}</div></div>
               <div style={{ gridColumn: '1 / -1' }}><div className="detail-label">Resolution Note</div><div className="detail-value">{detailAlert.resolution_note || '-'}</div></div>
             </div>

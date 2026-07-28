@@ -17,14 +17,29 @@ const ALLOWED_SCOPES = {
   PRESSURE: ['GLOBAL', 'BUS_MODEL'],
   INSPECTION_INTERVAL: ['GLOBAL'],
   ESCALATION_DAYS: ['GLOBAL'],
+  ROTATION_INTERVAL: ['GLOBAL'],
+  ROTATION_INTERVAL_KM: ['GLOBAL'],
+  TOE: ['GLOBAL'],
+  CASTER: ['GLOBAL'],
+  CAMBER: ['GLOBAL'],
+  SAI: ['GLOBAL'],
 };
 // Which of the four numeric fields are meaningful per parameter. NSD/INSPECTION/
 // ESCALATION are single-bound (upper limit only); PRESSURE is a two-sided band.
+// Wheel Alignment axes (TOE/CASTER/CAMBER/SAI) use warning_min/warning_max as
+// a single standard range -- no warning/critical severity tiers, just in or
+// out of spec -- so critical is deliberately empty for all four.
 const REQUIRED_FIELDS = {
   NSD: { warning: ['warning_max'], critical: ['critical_max'] },
   PRESSURE: { warning: ['warning_min', 'warning_max'], critical: ['critical_min', 'critical_max'] },
   INSPECTION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
   ESCALATION_DAYS: { warning: ['warning_max'], critical: [] },
+  ROTATION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
+  ROTATION_INTERVAL_KM: { warning: ['warning_max'], critical: ['critical_max'] },
+  TOE: { warning: ['warning_min', 'warning_max'], critical: [] },
+  CASTER: { warning: ['warning_min', 'warning_max'], critical: [] },
+  CAMBER: { warning: ['warning_min', 'warning_max'], critical: [] },
+  SAI: { warning: ['warning_min', 'warning_max'], critical: [] },
 };
 
 const SELECT_THRESHOLD = `

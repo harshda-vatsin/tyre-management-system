@@ -918,6 +918,155 @@ tr.row-accent-critical td:first-child {
   color: #fff;
 }
 
+/* Tyre Passport lifecycle timeline */
+.lifecycle-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.lifecycle-timeline-item {
+  display: flex;
+  gap: 0.9rem;
+}
+
+.lifecycle-timeline-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.lifecycle-timeline-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-top: 0.35rem;
+  flex-shrink: 0;
+}
+
+.lifecycle-timeline-line {
+  flex: 1;
+  width: 2px;
+  background: var(--border);
+  margin: 0.15rem 0;
+}
+
+.lifecycle-timeline-content {
+  flex: 1;
+  padding-bottom: 1.35rem;
+  min-width: 0;
+}
+
+.lifecycle-timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.lifecycle-timeline-date {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.lifecycle-timeline-desc {
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--text);
+  word-wrap: break-word;
+}
+
+.lifecycle-timeline-meta {
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.lifecycle-timeline-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.lifecycle-timeline-amendments {
+  margin-top: 0.5rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius-md);
+}
+
+/* Lifecycle macro-stage progress bar */
+.lifecycle-progress-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.lifecycle-progress-step {
+  flex: 1;
+  min-width: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  position: relative;
+}
+
+.lifecycle-progress-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 10px);
+  right: calc(-50% + 10px);
+  height: 2px;
+  background: var(--border);
+}
+
+.lifecycle-progress-done:not(:last-child)::after {
+  background: var(--primary);
+}
+
+.lifecycle-progress-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  border: 2px solid var(--border);
+  z-index: 1;
+}
+
+.lifecycle-progress-done .lifecycle-progress-dot {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.lifecycle-progress-current .lifecycle-progress-dot {
+  background: var(--surface);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.lifecycle-progress-label {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.lifecycle-progress-current .lifecycle-progress-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lifecycle-progress-done .lifecycle-progress-label {
+  color: var(--text-secondary);
+}
+
 /* Empty / loading states ----------------------------------------------------- */
 
 .empty-state {
@@ -1551,15 +1700,18 @@ a.bus-diagram-tyre {
 }
 
 .notification-bell-btn {
-  background: transparent;
-  border: none;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 0.35rem;
-  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   position: relative;
   transition: background 0.12s ease, color 0.12s ease;
 }

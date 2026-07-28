@@ -3,60 +3,44 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Printer, AlertTriangle, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { Printer } from 'lucide-react';
 import { api, downloadFile } from '../../../../lib/api.js';
 import { useAuth } from '../../../../components/AuthContext.jsx';
 import { useSettings } from '../../../../components/SettingsContext.jsx';
 import { ROLES } from '../../../../lib/roles.js';
-import { AMENDABLE_FIELDS } from '../../../../lib/amendableFields.js';
 import { formatPressure } from '../../../../lib/units.js';
 import { formatDate } from '../../../../lib/dates.js';
 import Pagination from '../../../../components/Pagination.jsx';
 import PageHeader from '../../../../components/PageHeader.jsx';
 import LoadingState from '../../../../components/LoadingState.jsx';
-import EmptyState from '../../../../components/EmptyState.jsx';
 import AmendEventModal from '../../../../components/AmendEventModal.jsx';
-import AmendmentTimeline from '../../../../components/AmendmentTimeline.jsx';
+import LifecycleTimeline from '../../../../components/LifecycleTimeline.jsx';
+import LifecycleProgressBar from '../../../../components/LifecycleProgressBar.jsx';
+import QuickActionModal from '../../../../components/QuickActionModal.jsx';
 import QRCode from 'qrcode';
+import { EVENT_TYPE_LABELS, statusBadgeClass, describeEvent as describeEventShared } from '../../../../lib/tyreLifecycle.js';
 
 const AMEND_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER];
+const WRITE_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR];
+const ELEVATED_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER];
 
-const EVENT_TYPE_LABELS = {
-  nsd_reading: 'NSD Reading',
-  pressure_reading: 'Pressure Reading',
-  rotation: 'Rotation',
-  replacement: 'Replacement',
-  puncture_repair: 'Puncture Repair',
-  inter_bus_transfer: 'Inter-Bus Transfer',
-  send_to_store: 'Sent to Store',
-  condemnation: 'Condemnation',
-};
-
-const STATUS_BADGE = { 'In Service': 'badge-success', 'In Store': 'badge-info', Condemned: 'badge-critical', 'Under Repair': 'badge-warning' };
+// Quick actions available on the tyre detail page itself, alongside the
+// full event picker on /log-event. `elevated` mirrors the backend's
+// ELEVATED_EVENT_TYPES (Depot Manager/Administrator only); `requiresMounted`
+// hides the action when the tyre has no current_bus_id, the same
+// precondition /log-event already enforces via TyreSelect's mountedOnly.
+const QUICK_ACTIONS = [
+  { eventType: 'rotation', label: 'Rotate', requiresMounted: true },
+  { eventType: 'send_to_repair', label: 'Send to Repair' },
+  { eventType: 'puncture_repair', label: 'Repair Completed' },
+  { eventType: 'retread_sent', label: 'Send to Retread' },
+  { eventType: 'retread_completed', label: 'Retread Completed' },
+  { eventType: 'warranty_claim', label: 'Warranty Claim' },
+  { eventType: 'scrap', label: 'Scrap', elevated: true },
+];
 
 function describeEvent(e, pressureUnit) {
-  switch (e.event_type) {
-    case 'nsd_reading':
-      return `NSD: ${e.nsd_value} mm at ${e.position} (${e.bus_registration_no})`;
-    case 'pressure_reading':
-      return `Pressure: ${formatPressure(e.pressure_value, pressureUnit)} at ${e.position} (${e.bus_registration_no})`;
-    case 'rotation':
-      return `${e.from_position} → ${e.to_position} on ${e.bus_registration_no}${e.reason ? ` - ${e.reason}` : ''}`;
-    case 'replacement':
-      return e.to_position
-        ? `Installed at ${e.to_position} on ${e.bus_registration_no}, replacing tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`
-        : `Removed from ${e.from_position} on ${e.bus_registration_no}, replaced by tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`;
-    case 'puncture_repair':
-      return `${e.repair_type} repair${e.notes ? ` - ${e.notes}` : ''}`;
-    case 'inter_bus_transfer':
-      return `${e.from_bus_registration_no}/${e.from_position} → ${e.to_bus_registration_no}/${e.to_position}${e.reason ? ` - ${e.reason}` : ''}`;
-    case 'send_to_store':
-      return `Removed from ${e.from_bus_registration_no || '-'}/${e.from_position || '-'}, NSD ${e.nsd_value} mm, stored at ${e.stored_at} - ${e.reason}`;
-    case 'condemnation':
-      return `Condemned at NSD ${e.nsd_value} mm - ${e.reason}`;
-    default:
-      return '-';
-  }
+  return describeEventShared(e, pressureUnit, formatPressure);
 }
 
 export default function TyreDetailPage() {
@@ -64,8 +48,11 @@ export default function TyreDetailPage() {
   const { user } = useAuth();
   const { pressureUnit } = useSettings();
   const canAmend = AMEND_ROLES.includes(user?.role);
+  const canWrite = WRITE_ROLES.includes(user?.role);
+  const canElevated = ELEVATED_ROLES.includes(user?.role);
   const [tyre, setTyre] = useState(null);
   const [error, setError] = useState('');
+  const [quickActionType, setQuickActionType] = useState(null);
 
   const [events, setEvents] = useState([]);
   const [total, setTotal] = useState(0);
@@ -83,8 +70,13 @@ export default function TyreDetailPage() {
 
   const [qrCodeUrl, setQrCodeUrl] = useState('');
 
+  function reloadTyre() {
+    return api.get(`/tyres/${id}`).then(setTyre).catch((err) => setError(err.message));
+  }
+
   useEffect(() => {
-    api.get(`/tyres/${id}`).then(setTyre).catch((err) => setError(err.message));
+    reloadTyre();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -115,25 +107,32 @@ export default function TyreDetailPage() {
     setAmendmentsMap(map);
   }
 
-  useEffect(() => {
-    async function loadEvents() {
-      setHistoryError('');
-      try {
-        const params = new URLSearchParams({ tyre_id: id, page: String(page), pageSize: String(pageSize) });
-        if (eventType) params.set('event_type', eventType);
-        if (from) params.set('from', from);
-        if (to) params.set('to', to);
-        const data = await api.get(`/events?${params.toString()}`);
-        setEvents(data.data);
-        setTotal(data.total);
-        setExpandedIds(new Set());
-        loadAmendments(data.data);
-      } catch (err) {
-        setHistoryError(err.message);
-      }
+  async function loadEvents() {
+    setHistoryError('');
+    try {
+      const params = new URLSearchParams({ tyre_id: id, page: String(page), pageSize: String(pageSize) });
+      if (eventType) params.set('event_type', eventType);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const data = await api.get(`/events?${params.toString()}`);
+      setEvents(data.data);
+      setTotal(data.total);
+      setExpandedIds(new Set());
+      loadAmendments(data.data);
+    } catch (err) {
+      setHistoryError(err.message);
     }
+  }
+
+  useEffect(() => {
     loadEvents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, eventType, from, to, page]);
+
+  async function handleQuickActionSaved() {
+    setQuickActionType(null);
+    await Promise.all([reloadTyre(), loadEvents()]);
+  }
 
   function toggleExpand(eventId) {
     setExpandedIds((prev) => {
@@ -178,7 +177,7 @@ export default function TyreDetailPage() {
           <div><div className="detail-label">Size</div><div className="detail-value">{tyre.size || '-'}</div></div>
           <div><div className="detail-label">Date of Purchase</div><div className="detail-value">{formatDate(tyre.purchase_date)}</div></div>
           <div><div className="detail-label">Initial NSD</div><div className="detail-value">{tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-'}</div></div>
-          <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[tyre.status] || ''}`}>{tyre.status}</span></div></div>
+          <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${statusBadgeClass(tyre.status)}`}>{tyre.status}</span></div></div>
           <div><div className="detail-label">Current Depot</div><div className="detail-value">{tyre.depot_name || '-'}</div></div>
           <div>
             <div className="detail-label">Current Bus / Position</div>
@@ -202,6 +201,24 @@ export default function TyreDetailPage() {
       </div>
 
       <div className="card">
+        <div className="card-title-row"><h3>Lifecycle Stage</h3></div>
+        <LifecycleProgressBar status={tyre.status} />
+      </div>
+
+      {canWrite && (
+        <div className="card">
+          <div className="card-title-row"><h3>Quick Actions</h3></div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {QUICK_ACTIONS.filter((a) => (!a.elevated || canElevated) && (!a.requiresMounted || tyre.current_bus_id)).map((a) => (
+              <button key={a.eventType} type="button" className="secondary" onClick={() => setQuickActionType(a.eventType)}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
         <div className="card-title-row"><h3>Tyre Card History</h3></div>
         <div className="toolbar">
           <div className="field" style={{ minWidth: 180 }}>
@@ -222,69 +239,17 @@ export default function TyreDetailPage() {
         </div>
 
         {historyError && <div className="error-text">{historyError}</div>}
-        {events.length === 0 ? (
-          <EmptyState title="No events recorded yet" />
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Event Type</th>
-                  <th>Details</th>
-                  <th>Recorded By</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e) => {
-                  const amendments = amendmentsMap[e.id] || [];
-                  const isCorrected = amendments.length > 0;
-                  const isExpanded = expandedIds.has(e.id);
-                  return (
-                    <React.Fragment key={e.id}>
-                      <tr>
-                        <td>{formatDate(e.event_date)}</td>
-                        <td><span className="badge">{EVENT_TYPE_LABELS[e.event_type]}</span></td>
-                        <td className="wrap">
-                          {describeEvent(e, pressureUnit)}
-                          {isCorrected && (
-                            <span className="badge badge-warning" style={{ marginLeft: '0.5rem' }}>
-                              <AlertTriangle size={11} /> Corrected
-                            </span>
-                          )}
-                        </td>
-                        <td>{e.performed_by_name || '-'}</td>
-                        <td>
-                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                            {isCorrected && (
-                              <button type="button" className="ghost" onClick={() => toggleExpand(e.id)}>
-                                {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                {isExpanded ? 'Collapse' : 'Expand'}
-                              </button>
-                            )}
-                            {canAmend && AMENDABLE_FIELDS[e.event_type] && (
-                              <button type="button" className="secondary" onClick={() => setAmendingEvent(e)}>
-                                <Pencil size={13} /> Amend Event
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr>
-                          <td colSpan={5} style={{ background: 'var(--surface-muted)' }}>
-                            <AmendmentTimeline event={e} amendments={amendments} pressureUnit={pressureUnit} busMap={busMap} />
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <LifecycleTimeline
+          events={events}
+          pressureUnit={pressureUnit}
+          formatPressure={formatPressure}
+          amendmentsMap={amendmentsMap}
+          expandedIds={expandedIds}
+          onToggleExpand={toggleExpand}
+          canAmend={canAmend}
+          onAmend={setAmendingEvent}
+          busMap={busMap}
+        />
         <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
       </div>
 
@@ -294,6 +259,15 @@ export default function TyreDetailPage() {
           eventTypeLabel={EVENT_TYPE_LABELS[amendingEvent.event_type]}
           onClose={() => setAmendingEvent(null)}
           onSaved={() => handleAmendmentSaved(amendingEvent)}
+        />
+      )}
+
+      {quickActionType && (
+        <QuickActionModal
+          tyre={tyre}
+          eventType={quickActionType}
+          onClose={() => setQuickActionType(null)}
+          onSaved={handleQuickActionSaved}
         />
       )}
     </div>

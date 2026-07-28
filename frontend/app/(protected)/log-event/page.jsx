@@ -7,19 +7,9 @@ import { useAuth } from '../../../components/AuthContext.jsx';
 import { ROLES } from '../../../lib/roles.js';
 import TyreSelect from '../../../components/TyreSelect.jsx';
 import PageHeader from '../../../components/PageHeader.jsx';
+import { EVENT_TYPES as ALL_EVENT_TYPES, statusBadgeClass } from '../../../lib/tyreLifecycle.js';
 
-const EVENT_TYPES = [
-  { value: 'nsd_reading', label: 'NSD Reading' },
-  { value: 'pressure_reading', label: 'Pressure Reading' },
-  { value: 'rotation', label: 'Tyre Rotation' },
-  { value: 'replacement', label: 'Tyre Replacement' },
-  { value: 'puncture_repair', label: 'Puncture Repair' },
-  { value: 'inter_bus_transfer', label: 'Inter-Bus Transfer' },
-  { value: 'send_to_store', label: 'Sending to Store', elevated: true },
-  { value: 'condemnation', label: 'Condemnation', elevated: true },
-];
-
-const STATUS_BADGE = { 'In Service': 'badge-success', 'In Store': 'badge-info', Condemned: 'badge-critical', 'Under Repair': 'badge-warning' };
+const EVENT_TYPES = ALL_EVENT_TYPES.filter((t) => !t.hiddenFromLogEvent);
 
 export default function LogEventPage() {
   const { user } = useAuth();
@@ -40,12 +30,14 @@ export default function LogEventPage() {
   useEffect(() => {
     setTyre(null);
     if (eventType === 'nsd_reading') {
-      const localDate = new Date();
-      const year = localDate.getFullYear();
-      const month = String(localDate.getMonth() + 1).padStart(2, '0');
-      const day = String(localDate.getDate()).padStart(2, '0');
-      const todayStr = `${year}-${month}-${day}`;
-      setFields({ event_date: todayStr });
+      // "Today" per IST, not the viewing browser's own local timezone --
+      // the app's server-side timestamps are all IST-displayed, so the
+      // default date here should match rather than drift for a viewer
+      // whose machine is set to a different timezone.
+      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' })
+        .formatToParts(new Date())
+        .reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+      setFields({ event_date: `${parts.year}-${parts.month}-${parts.day}` });
     } else {
       setFields({});
     }
@@ -62,15 +54,19 @@ export default function LogEventPage() {
     if (tyre?.current_bus_id && eventType === 'inter_bus_transfer') {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data.filter((b) => b.id !== tyre.current_bus_id)));
     }
+    if (eventType === 'fitment_created') {
+      api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data));
+    }
   }, [tyre, eventType]);
 
   useEffect(() => {
-    if (fields.to_bus_id) {
-      api.get(`/buses/${fields.to_bus_id}`).then((b) => setDestPositions(b.position_labels));
+    const busId = fields.to_bus_id || fields.bus_id;
+    if (busId) {
+      api.get(`/buses/${busId}`).then((b) => setDestPositions(b.position_labels));
     } else {
       setDestPositions([]);
     }
-  }, [fields.to_bus_id]);
+  }, [fields.to_bus_id, fields.bus_id]);
 
   if (!canWrite) {
     return <div className="card error-text">Access denied. Event logging is restricted to Tyre Supervisors, Depot Managers, and Administrators.</div>;
@@ -116,15 +112,32 @@ export default function LogEventPage() {
 
   function renderTypeFields() {
     switch (eventType) {
-      case 'nsd_reading':
+      case 'nsd_reading': {
+        const groovesFilled = ['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].every((k) => fields[k] !== undefined && fields[k] !== '');
         return (
           <>
             <div className="field">
-              <label>NSD Value</label>
+              <label>NSD Value{groovesFilled ? ' (auto: min of grooves below)' : ''}</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
+                <input type="number" step="0.1" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required={!groovesFilled} />
                 <span className="input-suffix">mm</span>
               </div>
+            </div>
+            <div className="field">
+              <label>Per-Groove Readings (optional)</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].map((key, i) => (
+                  <div className="input-suffix-wrap" key={key}>
+                    <input
+                      type="number" step="0.1" min="0" max="25"
+                      placeholder={`G${i + 1}`}
+                      value={fields[key] || ''}
+                      onChange={(e) => set(key, e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <span className="field-hint">If all 4 groove points are entered and NSD Value is left blank, NSD Value is taken as their minimum.</span>
             </div>
             <div className="field">
               <label>Event Date</label>
@@ -132,6 +145,7 @@ export default function LogEventPage() {
             </div>
           </>
         );
+      }
       case 'pressure_reading':
         return (
           <div className="field">
@@ -151,6 +165,13 @@ export default function LogEventPage() {
                 <option value="">{tyre ? 'Select position' : 'Select a mounted tyre first'}</option>
                 {busPositions.filter((p) => p !== tyre?.current_position).map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
+            </div>
+            <div className="field">
+              <label>NSD Value</label>
+              <div className="input-suffix-wrap">
+                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <span className="input-suffix">mm</span>
+              </div>
             </div>
             <div className="field">
               <label>Reason</label>
@@ -173,6 +194,26 @@ export default function LogEventPage() {
             </div>
           </>
         );
+      case 'send_to_repair':
+        return (
+          <>
+            <div className="field">
+              <label>NSD Value</label>
+              <div className="input-suffix-wrap">
+                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <span className="input-suffix">mm</span>
+              </div>
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. puncture found" />
+            </div>
+            <div className="field">
+              <label>Odometer Reading (km)</label>
+              <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
+            </div>
+          </>
+        );
       case 'puncture_repair':
         return (
           <>
@@ -184,6 +225,26 @@ export default function LogEventPage() {
                 <option value="patch">Patch</option>
                 <option value="tube">Tube</option>
               </select>
+            </div>
+            <div className="field">
+              <label>Repair Cost</label>
+              <input type="number" step="0.01" value={fields.repair_cost || ''} onChange={(e) => set('repair_cost', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Patch Size</label>
+              <input value={fields.patch_size || ''} onChange={(e) => set('patch_size', e.target.value)} placeholder="e.g. 30mm" />
+            </div>
+            <div className="field">
+              <label>Supervisor Name</label>
+              <input value={fields.supervisor_name || ''} onChange={(e) => set('supervisor_name', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Tyre Man Name</label>
+              <input value={fields.tyre_man_name || ''} onChange={(e) => set('tyre_man_name', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Odometer Reading (km)</label>
+              <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
             </div>
             <div className="field">
               <label>Notes</label>
@@ -250,12 +311,224 @@ export default function LogEventPage() {
             </div>
           </>
         );
+      case 'fitment_created':
+        return (
+          <>
+            <div className="field">
+              <label>Bus</label>
+              <select value={fields.bus_id || ''} onChange={(e) => set('bus_id', e.target.value)} required>
+                <option value="">Select bus</option>
+                {destBuses.map((b) => <option key={b.id} value={b.id}>{b.registration_no} ({b.depot_name})</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Position</label>
+              <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required disabled={!fields.bus_id}>
+                <option value="">Select position</option>
+                {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Odometer Reading (km)</label>
+              <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. new fitment" />
+            </div>
+          </>
+        );
+      case 'reservation':
+        return (
+          <div className="field">
+            <label>Reason</label>
+            <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. allocated to next fitment run" />
+          </div>
+        );
+      case 'inspection_completed':
+        return (
+          <div className="field">
+            <label>Notes</label>
+            <input value={fields.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="e.g. all checks passed" />
+          </div>
+        );
+      case 'retread_sent':
+        return (
+          <>
+            <div className="field">
+              <label>Vendor Name</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Acme Retreads" required />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Gate Pass No.</label>
+              <input value={fields.gate_pass_no || ''} onChange={(e) => set('gate_pass_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Purpose</label>
+              <select value={fields.retread_purpose || ''} onChange={(e) => set('retread_purpose', e.target.value)}>
+                <option value="">Select</option>
+                <option value="Retread">Retread</option>
+                <option value="Cut Repair">Cut Repair</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Odometer Reading (km)</label>
+              <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. tread worn, retread eligible" />
+            </div>
+          </>
+        );
+      case 'retread_completed':
+        return (
+          <>
+            <div className="field">
+              <label>Outcome</label>
+              <select value={fields.outcome || ''} onChange={(e) => set('outcome', e.target.value)}>
+                <option value="">Select</option>
+                <option value="Done">Done</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Vendor Name</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Acme Retreads" />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Invoice No.</label>
+              <input value={fields.invoice_no || ''} onChange={(e) => set('invoice_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Invoice Date</label>
+              <input type="date" value={fields.invoice_date || ''} onChange={(e) => set('invoice_date', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Retread Cost</label>
+              <input type="number" step="0.01" value={fields.retread_cost || ''} onChange={(e) => set('retread_cost', e.target.value)} />
+            </div>
+            {fields.outcome === 'Rejected' && (
+              <div className="field">
+                <label>Rejected Reason</label>
+                <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. carcass damage, not retreadable" />
+              </div>
+            )}
+            <div className="field">
+              <label>Notes</label>
+              <input value={fields.notes || ''} onChange={(e) => set('notes', e.target.value)} />
+            </div>
+          </>
+        );
+      case 'warranty_claim':
+        return (
+          <>
+            <div className="field">
+              <label>Outcome</label>
+              <select value={fields.outcome || ''} onChange={(e) => set('outcome', e.target.value)}>
+                <option value="">Submit new claim</option>
+                <option value="approved">Decision: Approved</option>
+                <option value="rejected">Decision: Rejected</option>
+                <option value="closed">Close claim (return to store)</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. premature wear" required={!fields.outcome} />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Approved By</label>
+              <input value={fields.approved_by || ''} onChange={(e) => set('approved_by', e.target.value)} />
+            </div>
+          </>
+        );
+      case 'scrap':
+        return (
+          <>
+            <div className="field">
+              <label>Scrap Value</label>
+              <input type="number" step="0.01" value={fields.scrap_value || ''} onChange={(e) => set('scrap_value', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Vendor Name</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Gate Pass No.</label>
+              <input value={fields.gate_pass_no || ''} onChange={(e) => set('gate_pass_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Invoice No.</label>
+              <input value={fields.invoice_no || ''} onChange={(e) => set('invoice_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Invoice Date</label>
+              <input type="date" value={fields.invoice_date || ''} onChange={(e) => set('invoice_date', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Approved By</label>
+              <input value={fields.approved_by || ''} onChange={(e) => set('approved_by', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Store Manager</label>
+              <input value={fields.store_manager || ''} onChange={(e) => set('store_manager', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>NSD Value</label>
+              <div className="input-suffix-wrap">
+                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <span className="input-suffix">mm</span>
+              </div>
+            </div>
+            <div className="field">
+              <label>Odometer Reading (km)</label>
+              <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. end of usable tread life" required />
+            </div>
+          </>
+        );
+      case 'scrap_disposal':
+        return (
+          <>
+            <div className="field">
+              <label>Milestone</label>
+              <select value={fields.milestone || ''} onChange={(e) => set('milestone', e.target.value)} required>
+                <option value="">Select</option>
+                <option value="Disposed">Disposed</option>
+                <option value="Archived">Archived</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. disposed per policy" />
+            </div>
+          </>
+        );
       default:
         return null;
     }
   }
 
-  const needsMountedTyre = ['nsd_reading', 'pressure_reading', 'rotation', 'replacement', 'inter_bus_transfer'].includes(eventType);
+  const needsMountedTyre = ['nsd_reading', 'pressure_reading', 'rotation', 'replacement', 'inter_bus_transfer', 'inspection_completed'].includes(eventType);
 
   return (
     <div style={{ maxWidth: 560, margin: '0 auto' }}>
@@ -285,7 +558,7 @@ export default function LogEventPage() {
                   <strong>{tyre.tyre_number}</strong>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}> · {tyre.brand}</span>
                 </div>
-                <span className={`badge ${STATUS_BADGE[tyre.status] || ''}`}>{tyre.status}</span>
+                <span className={`badge ${statusBadgeClass(tyre.status)}`}>{tyre.status}</span>
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
                 {tyre.bus_registration_no ? `Mounted on ${tyre.bus_registration_no} / ${tyre.current_position}` : `In depot: ${tyre.depot_name || '-'}`}

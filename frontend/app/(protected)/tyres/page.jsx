@@ -1,5 +1,4 @@
 'use client';
-
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Plus, CircleDot, UploadCloud } from 'lucide-react';
@@ -15,6 +14,7 @@ import LoadingState from '../../../components/LoadingState.jsx';
 import FilterBar from '../../../components/FilterBar.jsx';
 import Pagination from '../../../components/Pagination.jsx';
 import CsvImportModal from '../../../components/CsvImportModal.jsx';
+import { ALL_STATUSES, statusBadgeClass } from '../../../lib/tyreLifecycle.js';
 
 const IMPORT_COLUMNS = [
   { key: 'tyre_number', required: true, example: 'TY001' },
@@ -29,13 +29,13 @@ const IMPORT_COLUMNS = [
   { key: 'current_depot_id', example: '2' },
 ];
 
-const STATUS_OPTIONS = ['In Service', 'In Store', 'Condemned', 'Under Repair'];
-const STATUS_BADGE = { 'In Service': 'badge-success', 'In Store': 'badge-info', Condemned: 'badge-critical', 'Under Repair': 'badge-warning' };
+const STATUS_OPTIONS = ALL_STATUSES;
 
 function emptyForm(defaultDepotId) {
   return {
-    tyre_number: '', brand: '', model: '', size: '', purchase_date: '', initial_nsd: '',
+    tyre_number: '', brand: '', model: '', size: '', pattern: '', ply_rating: '', purchase_date: '', initial_nsd: '',
     status: 'In Store', current_bus_id: '', current_position: '', current_depot_id: defaultDepotId || '',
+    vendor_name: '', gate_pass_no: '', invoice_no: '', invoice_date: '',
   };
 }
 
@@ -114,6 +114,8 @@ export default function TyresPage() {
       brand: tyre.brand,
       model: tyre.model || '',
       size: tyre.size || '',
+      pattern: tyre.pattern || '',
+      ply_rating: tyre.ply_rating || '',
       purchase_date: tyre.purchase_date || '',
       initial_nsd: tyre.initial_nsd ?? '',
       status: tyre.status,
@@ -215,7 +217,7 @@ export default function TyresPage() {
                     <tr key={t.id}>
                       <td><Link href={`/tyres/${t.id}`}>{t.tyre_number}</Link></td>
                       <td>{t.brand}</td>
-                      <td><span className={`badge ${STATUS_BADGE[t.status] || ''}`}>{t.status}</span></td>
+                      <td><span className={`badge ${statusBadgeClass(t.status)}`}>{t.status}</span></td>
                       <td>{t.depot_name || '-'}</td>
                       <td>{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '-'}</td>
                       {canWrite && (
@@ -239,7 +241,7 @@ export default function TyresPage() {
                 <div key={t.id} className="mobile-record-card">
                   <div className="mobile-card-row mobile-card-header">
                     <Link href={`/tyres/${t.id}`} className="mobile-card-title">{t.tyre_number}</Link>
-                    <span className={`badge ${STATUS_BADGE[t.status] || ''}`}>{t.status}</span>
+                    <span className={`badge ${statusBadgeClass(t.status)}`}>{t.status}</span>
                   </div>
                   <div className="mobile-card-row">
                     <span className="mobile-card-label">Brand / Size</span>
@@ -299,6 +301,14 @@ export default function TyresPage() {
               <input value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} placeholder="e.g. 275/70 R22.5" />
             </div>
             <div className="field">
+              <label>Pattern</label>
+              <input value={form.pattern} onChange={(e) => setForm({ ...form, pattern: e.target.value })} placeholder="e.g. JTH-1" />
+            </div>
+            <div className="field">
+              <label>Ply Rating (PR/LI/SI)</label>
+              <input value={form.ply_rating} onChange={(e) => setForm({ ...form, ply_rating: e.target.value })} placeholder="e.g. 16" />
+            </div>
+            <div className="field">
               <label>Date of Purchase</label>
               <input type="date" value={form.purchase_date} onChange={(e) => setForm({ ...form, purchase_date: e.target.value })} />
             </div>
@@ -309,6 +319,27 @@ export default function TyresPage() {
                 <span className="input-suffix">mm</span>
               </div>
             </div>
+            {!editingId && (
+              <>
+                <div className="form-section-title">Purchase Detail (optional)</div>
+                <div className="field">
+                  <label>Vendor Name</label>
+                  <input value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label>Gate Pass No.</label>
+                  <input value={form.gate_pass_no} onChange={(e) => setForm({ ...form, gate_pass_no: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label>Invoice No.</label>
+                  <input value={form.invoice_no} onChange={(e) => setForm({ ...form, invoice_no: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label>Invoice Date</label>
+                  <input type="date" value={form.invoice_date} onChange={(e) => setForm({ ...form, invoice_date: e.target.value })} />
+                </div>
+              </>
+            )}
             <div className="field">
               <label>Status</label>
               <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>

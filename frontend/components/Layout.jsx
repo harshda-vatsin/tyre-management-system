@@ -6,7 +6,8 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Warehouse, Bus, CircleDot, ScanLine, ClipboardList,
   ListChecks, AlertTriangle, CalendarCheck, FileBarChart, Users as UsersIcon,
-  SlidersHorizontal, History, Menu, X, LogOut, Truck, Settings,
+  SlidersHorizontal, History, Menu, X, LogOut, Truck, Settings, Package as PackageIcon,
+  RotateCw, Gauge,
 } from 'lucide-react';
 import { useAuth } from './AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
@@ -24,6 +25,7 @@ const NAV_GROUPS = [
     label: 'Depots',
     items: [
       { to: '/depots', label: 'Depots', icon: Warehouse },
+      { to: '/packages', label: 'Packages', icon: PackageIcon },
     ],
   },
   {
@@ -40,6 +42,7 @@ const NAV_GROUPS = [
       { to: '/log-event', label: 'Log Event', icon: ClipboardList, roles: EVENT_LOGGING_ROLES },
       { to: '/tyres', label: 'Tyres', icon: CircleDot },
       { to: '/batch-inspection', label: 'Batch Inspection', icon: ListChecks, roles: EVENT_LOGGING_ROLES },
+      { to: '/batch-rotation', label: 'Batch Rotation', icon: RotateCw, roles: EVENT_LOGGING_ROLES },
     ],
   },
   {
@@ -47,6 +50,8 @@ const NAV_GROUPS = [
     items: [
       { to: '/alerts', label: 'Alerts', icon: AlertTriangle },
       { to: '/inspection-compliance', label: 'Inspection Compliance', icon: CalendarCheck },
+      { to: '/rotation-compliance', label: 'Rotation Compliance', icon: RotateCw },
+      { to: '/wheel-alignment', label: 'Wheel Alignment', icon: Gauge },
       { to: '/reports', label: 'Reports', icon: FileBarChart },
       { to: '/audit-log', label: 'Audit Log', icon: History, roles: [ROLES.ADMIN, ROLES.NATIONAL_FLEET_MANAGER, ROLES.AUDITOR] },
     ],

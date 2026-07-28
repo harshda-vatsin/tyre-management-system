@@ -8,10 +8,12 @@ const db = require('../db');
 const { resolveThreshold, evaluateInspectionAge } = require('./thresholdEngine');
 const { upsertBreachAlert, autoResolveAlert } = require('./alertService');
 
-// Correlated subquery fetching the date of the latest reading event for a tyre
+// Also counts inspection_completed as a "reading" for baseline purposes --
+// an inspection sign-off legitimately resets the inspection-due clock even
+// without a fresh NSD/pressure value attached to it.
 const LAST_READING_SUBQUERY = `
   (SELECT event_date FROM tyre_events
-   WHERE tyre_id = t.id AND event_type IN ('nsd_reading', 'pressure_reading')
+   WHERE tyre_id = t.id AND event_type IN ('nsd_reading', 'pressure_reading', 'inspection_completed')
    ORDER BY event_date DESC, id DESC LIMIT 1)
 `;
 
@@ -38,7 +40,7 @@ function computeInspectionCompliance(tyre, lastReadingDate, threshold) {
  * @returns {Array<object>} Tyres with reading dates
  */
 function listInServiceTyresWithLastReading(depotId) {
-  const clauses = [`t.status = 'In Service'`];
+  const clauses = [`t.status = 'Active'`];
   const params = {};
   if (depotId) {
     clauses.push('t.current_depot_id = @depotId');
