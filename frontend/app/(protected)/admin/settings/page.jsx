@@ -21,7 +21,16 @@ export default function AdminSettingsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  const [misImportEnabled, setMisImportEnabled] = useState('true');
+  const [misImportSaving, setMisImportSaving] = useState(false);
+
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    api.get('/settings').then((data) => {
+      if (data.mis_import_enabled) setMisImportEnabled(data.mis_import_enabled);
+    }).catch(() => {});
+  }, []);
 
   async function handleUnitChange(unit) {
     if (unit === pressureUnit) return;
@@ -36,6 +45,22 @@ export default function AdminSettingsPage() {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleMisImportToggle(enabled) {
+    const value = enabled ? 'true' : 'false';
+    setMisImportSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      await api.put('/settings/mis_import_enabled', { value });
+      setMisImportEnabled(value);
+      setSuccess(`MIS Excel Import ${enabled ? 'enabled' : 'disabled'}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setMisImportSaving(false);
     }
   }
 
@@ -63,6 +88,27 @@ export default function AdminSettingsPage() {
           </select>
         </div>
         {saving && <LoadingState label="Saving..." />}
+      </div>
+
+      <div className="card">
+        <div className="card-title-row"><h3>MIS Excel Import</h3></div>
+        <p className="card-subtitle">
+          Kill switch for the MIS Excel importer. Disabling this immediately blocks new uploads, previews,
+          confirms, and cancellations -- imports already committed are unaffected. Use this if an issue
+          surfaces in production and there isn't time to deploy a fix.
+        </p>
+        <div className="field" style={{ maxWidth: 220 }}>
+          <label>Status</label>
+          <select
+            value={misImportEnabled}
+            disabled={misImportSaving}
+            onChange={(e) => handleMisImportToggle(e.target.value === 'true')}
+          >
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+        </div>
+        {misImportSaving && <LoadingState label="Saving..." />}
       </div>
     </div>
   );

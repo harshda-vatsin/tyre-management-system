@@ -1,0 +1,6 @@
+User_ID,Username,Email,Role,Depot_ID,Status
+U001,admin,admin@ebtms.local,Admin,,Active
+U002,manager_d001,manager1@ebtms.local,Depot_Manager,D001,Active
+U003,tech_d001,tech1@ebtms.local,Technician,D001,Active
+U004,manager_d002,manager2@ebtms.local,Depot_Manager,D002,Active
+U005,tech_d002,tech2@ebtms.local,Technician,D002,Onboarding

@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth');
 const { resolveThreshold } = require('../utils/thresholdEngine');
 const { computeInspectionCompliance, listInServiceTyresWithLastReading } = require('../utils/inspectionService');
 const { isDepotScoped } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -12,13 +13,13 @@ router.use(authenticate);
 // Inspection Due / Inspection Overdue views (SRS FR-AL-04 + milestone Frontend
 // section) are the same underlying list filtered by computed status, not two
 // separate endpoints -- avoids duplicating the tyre-lookup/join logic twice.
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { status, depot_id, bus_id, search, page = '1', pageSize = '20' } = req.query;
 
   const scopeDepotId = isDepotScoped(req.user) ? req.user.depot_id : (depot_id ? Number(depot_id) : undefined);
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
 
-  let tyres = listInServiceTyresWithLastReading(scopeDepotId);
+  let tyres = await listInServiceTyresWithLastReading(scopeDepotId);
 
   if (bus_id) tyres = tyres.filter((t) => t.current_bus_id === Number(bus_id));
   if (search) {
@@ -28,13 +29,13 @@ router.get('/', (req, res) => {
 
   const busIds = [...new Set(tyres.map((t) => t.current_bus_id).filter(Boolean))];
   const buses = busIds.length
-    ? db.prepare(`SELECT id, registration_no FROM buses WHERE id IN (${busIds.map(() => '?').join(',')})`).all(...busIds)
+    ? await db.prepare(`SELECT id, registration_no FROM buses WHERE id IN (${busIds.map(() => '?').join(',')})`).all(...busIds)
     : [];
   const busById = Object.fromEntries(buses.map((b) => [b.id, b]));
 
   const depotIds = [...new Set(tyres.map((t) => t.current_depot_id).filter(Boolean))];
   const depots = depotIds.length
-    ? db.prepare(`SELECT id, name FROM depots WHERE id IN (${depotIds.map(() => '?').join(',')})`).all(...depotIds)
+    ? await db.prepare(`SELECT id, name FROM depots WHERE id IN (${depotIds.map(() => '?').join(',')})`).all(...depotIds)
     : [];
   const depotById = Object.fromEntries(depots.map((d) => [d.id, d]));
 
@@ -65,6 +66,6 @@ router.get('/', (req, res) => {
   const data = results.slice(offset, offset + size);
 
   res.json({ data, total, page: pageNum, pageSize: size, threshold: threshold ? { warning_max: threshold.warning_max, critical_max: threshold.critical_max, unit: threshold.unit } : null });
-});
+}));
 
 module.exports = router;

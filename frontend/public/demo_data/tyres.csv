@@ -1,0 +1,11 @@
+Tyre_ID,Serial_Number,Brand,Size,Bus_ID,Position,Tread_Depth_mm,Status
+T001,MRF-1001,MRF,295/80R22.5,B101,Front_Left,12.5,Fitted
+T002,MRF-1002,MRF,295/80R22.5,B101,Front_Right,12.3,Fitted
+T003,JKA-2001,JK Tyre,295/80R22.5,B101,Rear_Left_Outer,11.0,Fitted
+T004,JKA-2002,JK Tyre,295/80R22.5,B101,Rear_Left_Inner,10.8,Fitted
+T005,JKA-2003,JK Tyre,295/80R22.5,B101,Rear_Right_Outer,11.2,Fitted
+T006,JKA-2004,JK Tyre,295/80R22.5,B101,Rear_Right_Inner,10.9,Fitted
+T007,APL-3001,Apollo,295/80R22.5,,None,15.0,Stock
+T008,APL-3002,Apollo,295/80R22.5,B102,Front_Left,6.5,Fitted
+T009,MCH-4001,Michelin,295/80R22.5,,None,3.2,Scrapped
+T010,MCH-4002,Michelin,295/80R22.5,B103,Rear_Left_Outer,8.5,Fitted

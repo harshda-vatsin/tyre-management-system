@@ -52,7 +52,7 @@ function listInServiceTyresWithLastReading(depotId) {
       FROM tyres t
       WHERE ${clauses.join(' AND ')}
     `)
-    .all(params);
+    .all(params); // returns a Promise -- callers must await
 }
 
 /**
@@ -61,16 +61,16 @@ function listInServiceTyresWithLastReading(depotId) {
  * @param {number|null} [depotId] - Optional depot ID scoping to restrict the sweep
  * @returns {Array<object>} Sweep results mapping tyres to their updated compliance status
  */
-function syncInspectionAlerts(depotId) {
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
-  const tyres = listInServiceTyresWithLastReading(depotId);
+async function syncInspectionAlerts(depotId) {
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const tyres = await listInServiceTyresWithLastReading(depotId);
   const results = [];
 
   for (const tyre of tyres) {
     const { status, daysSinceLastReading } = computeInspectionCompliance(tyre, tyre.last_reading_date, threshold);
 
     if (status === 'Overdue') {
-      upsertBreachAlert({
+      await upsertBreachAlert({
         tyreId: tyre.id,
         busId: tyre.current_bus_id,
         depotId: tyre.current_depot_id,
@@ -81,7 +81,7 @@ function syncInspectionAlerts(depotId) {
         triggeringEventId: null,
       });
     } else {
-      autoResolveAlert({ tyreId: tyre.id, parameterType: 'INSPECTION', resolvedByUserId: null });
+      await autoResolveAlert({ tyreId: tyre.id, parameterType: 'INSPECTION', resolvedByUserId: null });
     }
     results.push({ tyreId: tyre.id, status, daysSinceLastReading });
   }

@@ -11,6 +11,10 @@ backend/data/*.bak
 backend/data/*.bak-shm
 backend/data/*.bak-wal
 
+# Runtime-uploaded MIS Excel workbooks -- generated on the running instance,
+# not source.
+backend/uploads/
+
 # Scratch scripts that hardcode credentials against a live deployed instance
 # (tms.alturaworkspace.com) -- never track these.
 backend/scratch/query_all_prod.py

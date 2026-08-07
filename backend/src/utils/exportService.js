@@ -26,13 +26,35 @@ function formatFilters(filterSchema, filters) {
 
 /**
  * Safely stringifies cell values, converting null or undefined to empty strings.
- * 
+ *
  * @param {any} value
  * @returns {string} Cell value string
  */
 function cellText(value) {
   if (value === null || value === undefined) return '';
   return String(value);
+}
+
+// CSV/Excel formula injection (§9): a string value written verbatim into a
+// spreadsheet cell is interpreted as a formula by Excel/LibreOffice/Sheets
+// if it starts with =, +, -, or @ (e.g. a vendor name or remarks field of
+// "=cmd|'/c calc'!A1" opened by an unsuspecting recipient). Any free-text
+// field that ultimately reaches an export -- manual entry, CSV bulk import,
+// or an MIS Excel import's vendor_name/remarks/notes -- has to be treated
+// as untrusted at the point it's written, not filtered upstream at every
+// possible origin. Prefixing with a leading apostrophe is the standard,
+// non-destructive mitigation: every major spreadsheet application renders
+// '=SUM(A1) as the literal text =SUM(A1), not a formula, while still
+// showing the value to the reader (as opposed to stripping/blocking it,
+// which would silently lose real data).
+const FORMULA_INJECTION_PREFIXES = ['=', '+', '-', '@', '\t', '\r'];
+function sanitizeForSpreadsheet(value) {
+  if (value === null || value === undefined) return '';
+  const text = String(value);
+  if (text.length > 0 && FORMULA_INJECTION_PREFIXES.includes(text[0])) {
+    return `'${text}`;
+  }
+  return text;
 }
 
 /**
@@ -82,11 +104,15 @@ async function buildXlsx({ reportName, generatedAt, generatedByUsername, filterS
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D3A63' } };
   });
 
-  // Populate data rows into the sheet
+  // Populate data rows into the sheet. Only string values go through
+  // sanitizeForSpreadsheet() -- numbers/dates/booleans aren't a formula-
+  // injection vector, and coercing them to text would silently break
+  // sorting/filtering/SUM() for what should stay a real numeric cell.
   rows.forEach((row, rIdx) => {
     const excelRow = sheet.getRow(headerRowIndex + 1 + rIdx);
     columns.forEach((col, cIdx) => {
-      excelRow.getCell(cIdx + 1).value = row[col.key] ?? '';
+      const raw = row[col.key] ?? '';
+      excelRow.getCell(cIdx + 1).value = typeof raw === 'string' ? sanitizeForSpreadsheet(raw) : raw;
     });
   });
 
@@ -383,4 +409,4 @@ async function buildTyreCardPdf({ tyre, events, latestNsd, latestPressure, gener
   doc.end();
 }
 
-module.exports = { buildXlsx, buildPdf, buildTyreCardPdf };
+module.exports = { buildXlsx, buildPdf, buildTyreCardPdf, sanitizeForSpreadsheet };

@@ -6,11 +6,13 @@
 
 const express = require('express');
 const db = require('../db');
+const { NOW_SQL } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { acknowledgeAlert, resolveAlertManually, escalateStaleOpenAlerts, ApiError } = require('../utils/alertService');
 const { syncInspectionAlerts } = require('../utils/inspectionService');
 const { syncRotationAlerts } = require('../utils/rotationService');
 const { ROLES, isDepotScoped } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -25,11 +27,15 @@ function handleError(err, res) {
   throw err;
 }
 
+// Postgres equivalent of SQLite's julianday(a) - julianday(b): both columns
+// are TEXT ('YYYY-MM-DD HH:MM:SS' UTC), cast to timestamp and take the
+// fractional-day difference. ROUND()'s first argument must be `numeric`
+// (EXTRACT returns double precision), hence the explicit ::numeric cast.
 const SELECT_ALERT = `
   SELECT
     a.*,
     (a.escalation_level > 0) AS is_escalated,
-    ROUND(julianday(COALESCE(a.resolved_at, datetime('now'))) - julianday(a.opened_at), 1) AS age_days,
+    ROUND((EXTRACT(EPOCH FROM (COALESCE(a.resolved_at, ${NOW_SQL})::timestamp - a.opened_at::timestamp)) / 86400.0)::numeric, 1) AS age_days,
     t.tyre_number,
     b.registration_no AS bus_registration_no,
     d.name AS depot_name,
@@ -50,14 +56,14 @@ router.use(authenticate);
 // Reconciliation is synchronous and read-triggered (no cron dependency in this
 // skeleton): every list/detail read first escalates stale Open alerts and
 // syncs inspection-overdue alerts, so results are always current.
-function reconcile(req) {
-  escalateStaleOpenAlerts();
-  syncInspectionAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
-  syncRotationAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
+async function reconcile(req) {
+  await escalateStaleOpenAlerts();
+  await syncInspectionAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
+  await syncRotationAlerts(isDepotScoped(req.user) ? req.user.depot_id : undefined);
 }
 
-router.get('/', (req, res) => {
-  reconcile(req);
+router.get('/', asyncHandler(async (req, res) => {
+  await reconcile(req);
 
   const { search, status, severity, parameter_type, depot_id, tyre_id, bus_id, escalated, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
@@ -101,66 +107,66 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const total = db.prepare(`
-    SELECT COUNT(*) c 
+  const total = (await db.prepare(`
+    SELECT COUNT(*) c
     FROM alerts a
     JOIN tyres t ON t.id = a.tyre_id
     LEFT JOIN buses b ON b.id = a.bus_id
     ${where}
-  `).get(params).c;
+  `).get(params)).c;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const size = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
   const offset = (pageNum - 1) * size;
 
-  const rows = db
+  const rows = await db
     .prepare(`${SELECT_ALERT} ${where} ORDER BY a.status = 'Open' DESC, a.opened_at DESC LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit: size, offset });
 
   res.json({ data: rows, total, page: pageNum, pageSize: size });
-});
+}));
 
-router.get('/:id', (req, res) => {
-  reconcile(req);
+router.get('/:id', asyncHandler(async (req, res) => {
+  await reconcile(req);
 
-  const row = db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
+  const row = await db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Alert not found' });
   if (isDepotScoped(req.user) && row.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
   res.json(row);
-});
+}));
 
-router.patch('/:id/acknowledge', authorize(...WRITE_ROLES), (req, res) => {
-  const alert = db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id);
+router.patch('/:id/acknowledge', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const alert = await db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
   if (req.user.role === ROLES.DEPOT_MANAGER && alert.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
 
   try {
-    acknowledgeAlert(req.params.id, req.user);
-    const after = db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
+    await acknowledgeAlert(req.params.id, req.user);
+    const after = await db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
     res.json(after);
   } catch (err) {
     handleError(err, res);
   }
-});
+}));
 
-router.patch('/:id/resolve', authorize(...WRITE_ROLES), (req, res) => {
-  const alert = db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id);
+router.patch('/:id/resolve', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const alert = await db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
   if (req.user.role === ROLES.DEPOT_MANAGER && alert.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
 
   try {
-    resolveAlertManually(req.params.id, req.user, req.body?.resolution_note);
-    const after = db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
+    await resolveAlertManually(req.params.id, req.user, req.body?.resolution_note);
+    const after = await db.prepare(`${SELECT_ALERT} WHERE a.id = ?`).get(req.params.id);
     res.json(after);
   } catch (err) {
     handleError(err, res);
   }
-});
+}));
 
 module.exports = router;

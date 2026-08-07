@@ -1,8 +1,10 @@
 const express = require('express');
 const db = require('../db');
+const { NOW_SQL, PG_ERRORS } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 // SRS FR-DM-01/02: depot master create/edit/deactivate is Administrator-only.
@@ -15,7 +17,7 @@ router.use(authenticate);
 // (not the {data,total} paginated shape used elsewhere) because every other
 // page's depot-picker dropdown calls this same endpoint expecting a plain
 // list -- only the two new summary fields are additive.
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { search = '', is_active } = req.query;
   const clauses = [];
   const params = {};
@@ -30,7 +32,7 @@ router.get('/', (req, res) => {
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
-  const depots = db.prepare(`
+  const depots = await db.prepare(`
     SELECT
       d.*,
       COALESCE(bus_counts.active_bus_count, 0) AS active_bus_count,
@@ -47,78 +49,85 @@ router.get('/', (req, res) => {
   `).all(params);
 
   res.json(depots);
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const depot = db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const depot = await db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
   if (!depot) return res.status(404).json({ error: 'Depot not found' });
   res.json(depot);
-});
+}));
 
-router.post('/', authorize(...WRITE_ROLES), (req, res) => {
-  const { name, code, region, address } = req.body || {};
+router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  // Trimmed the same way the CSV bulk importer trims every field
+  // (utils/bulkImport.js importDepotRow) so a manually-typed depot code with
+  // stray leading/trailing whitespace can't slip past the uniqueness check
+  // as a "different" code from its CSV-imported counterpart.
+  const name = (req.body?.name || '').trim();
+  const code = (req.body?.code || '').trim();
+  const region = req.body?.region?.trim() || null;
+  const address = req.body?.address?.trim() || null;
   if (!name || !code) {
     return res.status(400).json({ error: 'name and code are required' });
   }
 
   try {
-    const info = db
+    const info = await db
       .prepare('INSERT INTO depots (name, code, region, address) VALUES (?, ?, ?, ?)')
-      .run(name, code, region || null, address || null);
-    const created = db.prepare('SELECT * FROM depots WHERE id = ?').get(info.lastInsertRowid);
+      .run(name, code, region, address);
+    const created = await db.prepare('SELECT * FROM depots WHERE id = ?').get(info.lastInsertRowid);
 
-    writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'depot', entityId: created.id, after: created });
+    await writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'depot', entityId: created.id, after: created });
 
     res.status(201).json(created);
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'Depot code already exists' });
     }
     throw err;
   }
-});
+}));
 
-router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
-  const before = db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
+router.put('/:id', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Depot not found' });
 
-  const name = req.body?.name ?? before.name;
-  const code = req.body?.code ?? before.code;
-  const region = req.body?.region ?? before.region;
-  const address = req.body?.address ?? before.address;
+  const name = req.body?.name !== undefined ? req.body.name.trim() : before.name;
+  const code = req.body?.code !== undefined ? req.body.code.trim() : before.code;
+  const region = req.body?.region !== undefined ? (req.body.region?.trim() || null) : before.region;
+  const address = req.body?.address !== undefined ? (req.body.address?.trim() || null) : before.address;
 
   try {
-    db.prepare(`
-      UPDATE depots SET name = ?, code = ?, region = ?, address = ?, updated_at = datetime('now')
+    await db.prepare(`
+      UPDATE depots SET name = ?, code = ?, region = ?, address = ?, updated_at = ${NOW_SQL}
       WHERE id = ?
     `).run(name, code, region, address, req.params.id);
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'Depot code already exists' });
     }
     throw err;
   }
 
-  const after = db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'depot', entityId: after.id, before, after });
+  const after = await db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'depot', entityId: after.id, before, after });
 
   res.json(after);
-});
+}));
 
-router.patch('/:id/status', authorize(...WRITE_ROLES), (req, res) => {
+router.patch('/:id/status', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const { is_active } = req.body || {};
   if (is_active === undefined) return res.status(400).json({ error: 'is_active is required' });
 
-  const before = db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
+  const before = await db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Depot not found' });
 
-  db.prepare(`UPDATE depots SET is_active = ?, updated_at = datetime('now') WHERE id = ?`).run(is_active ? 1 : 0, req.params.id);
+  await db.prepare(`UPDATE depots SET is_active = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(is_active ? 1 : 0, req.params.id);
 
-  const after = db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'depot', entityId: after.id, before, after });
+  const after = await db.prepare('SELECT * FROM depots WHERE id = ?').get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'depot', entityId: after.id, before, after });
 
   res.json(after);
-});
+}));
 
 // FR-DM-02: depots are never hard-deleted, only deactivated -- "shall not
 // delete historical records but shall prevent new entries against it." There

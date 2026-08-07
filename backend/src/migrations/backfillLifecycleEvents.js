@@ -38,56 +38,56 @@ const insertPurchaseIntake = db.prepare(`
 `);
 const getEvent = db.prepare('SELECT * FROM tyre_events WHERE id = ?');
 
-function auditBackfilledEvent(event) {
-  writeAuditLog({ user: null, action: 'CREATE', entityType: 'tyre_event', entityId: event.id, after: event });
+async function auditBackfilledEvent(event) {
+  await writeAuditLog({ user: null, action: 'CREATE', entityType: 'tyre_event', entityId: event.id, after: event });
 }
 
-function run() {
+async function run() {
   const summary = { sendToStore: 0, punctureRepair: 0, condemnation: 0, purchaseIntake: 0 };
 
-  const txn = db.transaction(() => {
+  const txn = db.transaction(async () => {
     // 1. 'In Store' tyres with no send_to_store event.
-    const inStoreMissing = db.prepare(`
+    const inStoreMissing = await db.prepare(`
       SELECT t.* FROM tyres t
       WHERE t.status = 'In Store'
       AND NOT EXISTS (SELECT 1 FROM tyre_events e WHERE e.tyre_id = t.id AND e.event_type = 'send_to_store')
     `).all();
     for (const tyre of inStoreMissing) {
-      const info = insertSendToStore.run(
+      const info = await insertSendToStore.run(
         tyre.id, tyre.updated_at || tyre.created_at, tyre.current_depot_id,
         BACKFILL_REASON, 'Unknown (system backfilled)', tyre.initial_nsd ?? null
       );
-      auditBackfilledEvent(getEvent.get(info.lastInsertRowid));
+      await auditBackfilledEvent(await getEvent.get(info.lastInsertRowid));
       summary.sendToStore++;
     }
 
     // 2. 'Under Repair' tyres with no send_to_repair event -- Under Repair
     // is now entered via send_to_repair (puncture_repair is the completion
     // event that resolves a tyre OUT of Under Repair back to In Store).
-    const underRepairMissing = db.prepare(`
+    const underRepairMissing = await db.prepare(`
       SELECT t.* FROM tyres t
       WHERE t.status = 'Under Repair'
       AND NOT EXISTS (SELECT 1 FROM tyre_events e WHERE e.tyre_id = t.id AND e.event_type = 'send_to_repair')
     `).all();
     for (const tyre of underRepairMissing) {
-      const info = insertSendToRepair.run(tyre.id, tyre.updated_at || tyre.created_at, tyre.current_depot_id, BACKFILL_REASON);
-      auditBackfilledEvent(getEvent.get(info.lastInsertRowid));
+      const info = await insertSendToRepair.run(tyre.id, tyre.updated_at || tyre.created_at, tyre.current_depot_id, BACKFILL_REASON);
+      await auditBackfilledEvent(await getEvent.get(info.lastInsertRowid));
       summary.punctureRepair++;
     }
 
     // 3. 'Scrapped' tyres (formerly 'Condemned' before the status-model
     // simplification) with no condemnation OR scrap event backing the
     // write-off.
-    const condemnedMissing = db.prepare(`
+    const condemnedMissing = await db.prepare(`
       SELECT t.* FROM tyres t
       WHERE t.status = 'Scrapped'
       AND NOT EXISTS (SELECT 1 FROM tyre_events e WHERE e.tyre_id = t.id AND e.event_type IN ('condemnation', 'scrap'))
     `).all();
     for (const tyre of condemnedMissing) {
-      const info = insertCondemnation.run(
+      const info = await insertCondemnation.run(
         tyre.id, tyre.updated_at || tyre.created_at, tyre.current_depot_id, tyre.initial_nsd ?? 0, BACKFILL_REASON
       );
-      auditBackfilledEvent(getEvent.get(info.lastInsertRowid));
+      await auditBackfilledEvent(await getEvent.get(info.lastInsertRowid));
       summary.condemnation++;
     }
 
@@ -95,32 +95,38 @@ function run() {
     // seeded tyre pre-refactor) gets a backfilled opening event, so no tyre's
     // timeline is ever empty. Runs after 1-3 so tyres already backfilled
     // above are correctly excluded (they now have exactly one event).
-    const noEventsAtAll = db.prepare(`
+    const noEventsAtAll = await db.prepare(`
       SELECT t.* FROM tyres t
       WHERE NOT EXISTS (SELECT 1 FROM tyre_events e WHERE e.tyre_id = t.id)
     `).all();
     for (const tyre of noEventsAtAll) {
-      const info = insertPurchaseIntake.run(
+      const info = await insertPurchaseIntake.run(
         tyre.id, tyre.created_at, tyre.current_bus_id, tyre.current_position, tyre.current_depot_id,
         `${BACKFILL_REASON} (opening event for a record with no prior history)`
       );
-      auditBackfilledEvent(getEvent.get(info.lastInsertRowid));
+      await auditBackfilledEvent(await getEvent.get(info.lastInsertRowid));
       summary.purchaseIntake++;
     }
   });
 
-  txn();
+  await txn();
   return summary;
 }
 
 if (require.main === module) {
-  const summary = run();
-  console.log('Lifecycle event backfill complete:');
-  console.log(`  send_to_store inserted:   ${summary.sendToStore}`);
-  console.log(`  puncture_repair inserted: ${summary.punctureRepair}`);
-  console.log(`  condemnation inserted:    ${summary.condemnation}`);
-  console.log(`  purchase_intake inserted: ${summary.purchaseIntake} (opening event for tyres with no prior history)`);
-  db.close();
+  (async () => {
+    await db.ready;
+    const summary = await run();
+    console.log('Lifecycle event backfill complete:');
+    console.log(`  send_to_store inserted:   ${summary.sendToStore}`);
+    console.log(`  puncture_repair inserted: ${summary.punctureRepair}`);
+    console.log(`  condemnation inserted:    ${summary.condemnation}`);
+    console.log(`  purchase_intake inserted: ${summary.purchaseIntake} (opening event for tyres with no prior history)`);
+    await db.close();
+  })().catch((err) => {
+    console.error('Backfill failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = { run };

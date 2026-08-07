@@ -17,18 +17,18 @@ const TYRE_STATUSES = ALL_STATUSES;
 /**
  * Counts tyres grouped by status ('In Service', 'In Store', etc.).
  * Optionally filters to a single depot.
- * 
+ *
  * @param {number|null} [depotId] - Optional depot ID to filter counts
- * @returns {Record<string, number>} Count map per status label
+ * @returns {Promise<Record<string, number>>} Count map per status label
  */
-function getTyreStatusCounts(depotId) {
+async function getTyreStatusCounts(depotId) {
   const params = {};
   let where = '';
   if (depotId) {
     where = 'WHERE current_depot_id = @depotId';
     params.depotId = depotId;
   }
-  const rows = db.prepare(`SELECT status, COUNT(*) c FROM tyres ${where} GROUP BY status`).all(params);
+  const rows = await db.prepare(`SELECT status, COUNT(*) c FROM tyres ${where} GROUP BY status`).all(params);
   const counts = Object.fromEntries(TYRE_STATUSES.map((s) => [s, 0]));
   for (const r of rows) counts[r.status] = r.c;
   return counts;
@@ -37,18 +37,18 @@ function getTyreStatusCounts(depotId) {
 /**
  * Counts currently active (Open/Acknowledged) alerts.
  * Grouped by severity ('Warning', 'Critical') and optionally filtered by depot.
- * 
+ *
  * @param {number|null} [depotId] - Optional depot ID to restrict scope
- * @returns {{Warning: number, Critical: number}} Summary counts
+ * @returns {Promise<{Warning: number, Critical: number}>} Summary counts
  */
-function getActiveAlertCounts(depotId) {
+async function getActiveAlertCounts(depotId) {
   const params = {};
   let where = `WHERE status IN ('Open', 'Acknowledged')`;
   if (depotId) {
     where += ' AND depot_id = @depotId';
     params.depotId = depotId;
   }
-  const rows = db.prepare(`SELECT severity, COUNT(*) c FROM alerts ${where} GROUP BY severity`).all(params);
+  const rows = await db.prepare(`SELECT severity, COUNT(*) c FROM alerts ${where} GROUP BY severity`).all(params);
   const counts = { Warning: 0, Critical: 0 };
   for (const r of rows) counts[r.severity] = r.c;
   return counts;
@@ -57,13 +57,13 @@ function getActiveAlertCounts(depotId) {
 /**
  * Counts tyres that are either "Due" or "Overdue" for inspection.
  * Computes this by inspecting the age of the last reading against the global interval threshold.
- * 
+ *
  * @param {number|null} [depotId] - Optional depot filter
- * @returns {{due: number, overdue: number}} Counts of affected tyres
+ * @returns {Promise<{due: number, overdue: number}>} Counts of affected tyres
  */
-function getInspectionCounts(depotId) {
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
-  const tyres = listInServiceTyresWithLastReading(depotId);
+async function getInspectionCounts(depotId) {
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const tyres = await listInServiceTyresWithLastReading(depotId);
   let due = 0;
   let overdue = 0;
   for (const t of tyres) {
@@ -79,12 +79,12 @@ function getInspectionCounts(depotId) {
  * getInspectionCounts exactly but against the rotation clock.
  *
  * @param {number|null} [depotId]
- * @returns {{due: number, overdue: number}}
+ * @returns {Promise<{due: number, overdue: number}>}
  */
-function getRotationCounts(depotId) {
-  const threshold = resolveThreshold('ROTATION_INTERVAL', {});
-  const kmThreshold = resolveThreshold('ROTATION_INTERVAL_KM', {});
-  const tyres = listInServiceTyresWithLastRotation(depotId);
+async function getRotationCounts(depotId) {
+  const threshold = await resolveThreshold('ROTATION_INTERVAL', {});
+  const kmThreshold = await resolveThreshold('ROTATION_INTERVAL_KM', {});
+  const tyres = await listInServiceTyresWithLastRotation(depotId);
   let due = 0;
   let overdue = 0;
   for (const t of tyres) {
@@ -106,16 +106,16 @@ function getRotationCounts(depotId) {
  * every parameter type, which isn't granular enough for those.
  *
  * @param {number|null} [depotId]
- * @returns {Record<string, {Warning: number, Critical: number}>}
+ * @returns {Promise<Record<string, {Warning: number, Critical: number}>>}
  */
-function getAlertCountsByParameter(depotId) {
+async function getAlertCountsByParameter(depotId) {
   const params = {};
   let where = `WHERE status IN ('Open', 'Acknowledged')`;
   if (depotId) {
     where += ' AND depot_id = @depotId';
     params.depotId = depotId;
   }
-  const rows = db.prepare(`SELECT parameter_type, severity, COUNT(*) c FROM alerts ${where} GROUP BY parameter_type, severity`).all(params);
+  const rows = await db.prepare(`SELECT parameter_type, severity, COUNT(*) c FROM alerts ${where} GROUP BY parameter_type, severity`).all(params);
   const counts = {
     NSD: { Warning: 0, Critical: 0 },
     PRESSURE: { Warning: 0, Critical: 0 },
@@ -138,16 +138,16 @@ function getAlertCountsByParameter(depotId) {
  * In Store that history would otherwise disappear from this KPI.
  *
  * @param {number|null} [depotId]
- * @returns {object}
+ * @returns {Promise<object>}
  */
-function getLifecycleGroupCounts(depotId) {
+async function getLifecycleGroupCounts(depotId) {
   const params = {};
   let where = '';
   if (depotId) {
     where = 'WHERE current_depot_id = @depotId';
     params.depotId = depotId;
   }
-  const rows = db.prepare(`SELECT status, COUNT(*) c FROM tyres ${where} GROUP BY status`).all(params);
+  const rows = await db.prepare(`SELECT status, COUNT(*) c FROM tyres ${where} GROUP BY status`).all(params);
   const byStatus = Object.fromEntries(rows.map((r) => [r.status, r.c]));
 
   const retreadedParams = {};
@@ -156,7 +156,7 @@ function getLifecycleGroupCounts(depotId) {
     retreadedWhere += ' AND e.depot_id = @depotId';
     retreadedParams.depotId = depotId;
   }
-  const retreadedTotal = db.prepare(`SELECT COUNT(*) c FROM tyre_events e ${retreadedWhere}`).get(retreadedParams).c;
+  const retreadedTotal = (await db.prepare(`SELECT COUNT(*) c FROM tyre_events e ${retreadedWhere}`).get(retreadedParams)).c;
 
   return {
     repair_queue: byStatus['Under Repair'] || 0,
@@ -170,10 +170,10 @@ function getLifecycleGroupCounts(depotId) {
 /**
  * Resolves the top-flagged buses with the highest count of unique active tyre alert warnings.
  * Used to identify vehicles requiring immediate maintenance attention.
- * 
+ *
  * @param {number|null} [depotId] - Optional depot ID filter
  * @param {number} [limit=10] - Max list limit size
- * @returns {Array<object>} Flagged bus items list
+ * @returns {Promise<Array<object>>} Flagged bus items list
  */
 function getTopFlaggedBuses(depotId, limit = 10) {
   const params = { limit };
@@ -189,22 +189,22 @@ function getTopFlaggedBuses(depotId, limit = 10) {
       JOIN buses b ON b.id = a.bus_id
       JOIN depots d ON d.id = b.depot_id
       ${where}
-      GROUP BY b.id
+      GROUP BY b.id, b.registration_no, b.depot_id, d.name
       ORDER BY flagged_count DESC
       LIMIT @limit
     `)
-    .all(params);
+    .all(params); // returns a Promise -- callers must await
 }
 
 /**
  * Maps each bus to an array containing the compliance status of each of its mounted tyres.
- * 
+ *
  * @param {number|null} [depotId] - Optional depot ID scoping
- * @returns {Map<number, string[]>} Map mapping Bus ID to compliance status array
+ * @returns {Promise<Map<number, string[]>>} Map mapping Bus ID to compliance status array
  */
-function computeBusComplianceMap(depotId) {
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
-  const tyres = listInServiceTyresWithLastReading(depotId);
+async function computeBusComplianceMap(depotId) {
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const tyres = await listInServiceTyresWithLastReading(depotId);
   const byBus = new Map();
   for (const t of tyres) {
     if (!t.current_bus_id) continue;
@@ -218,12 +218,12 @@ function computeBusComplianceMap(depotId) {
 /**
  * Calculates depot-wise compliance scores based on the percentage of active buses
  * that are fully compliant (having all mounted tyres marked "On Time").
- * 
- * @returns {Array<object>} Array of depot objects with compliance percentage indicators
+ *
+ * @returns {Promise<Array<object>>} Array of depot objects with compliance percentage indicators
  */
-function getDepotComplianceScores() {
-  const busCompliance = computeBusComplianceMap();
-  const buses = db.prepare(`SELECT b.id, b.depot_id, d.name AS depot_name FROM buses b JOIN depots d ON d.id = b.depot_id`).all();
+async function getDepotComplianceScores() {
+  const busCompliance = await computeBusComplianceMap();
+  const buses = await db.prepare(`SELECT b.id, b.depot_id, d.name AS depot_name FROM buses b JOIN depots d ON d.id = b.depot_id`).all();
 
   const perDepot = {};
   for (const bus of buses) {
@@ -244,23 +244,24 @@ function getDepotComplianceScores() {
 
 /**
  * Resolves compliance statistics summary for a single depot ID.
- * 
+ *
  * @param {number} depotId - Depot ID to query
- * @returns {object} Depot compliance summary object
+ * @returns {Promise<object>} Depot compliance summary object
  */
-function getComplianceForDepot(depotId) {
-  const found = getDepotComplianceScores().find((s) => s.depot_id === depotId);
+async function getComplianceForDepot(depotId) {
+  const scores = await getDepotComplianceScores();
+  const found = scores.find((s) => s.depot_id === depotId);
   return found || { depot_id: depotId, depot_name: null, total_buses: 0, compliant_buses: 0, compliance_pct: 0 };
 }
 
 /**
  * Resolves list of buses in a depot alongside tyre status rollups and flagged warnings counts.
- * 
+ *
  * @param {number} depotId - Depot ID reference
- * @returns {Array<object>} Bus list items with metrics payload
+ * @returns {Promise<Array<object>>} Bus list items with metrics payload
  */
-function getBusSummaries(depotId) {
-  const buses = db
+async function getBusSummaries(depotId) {
+  const buses = await db
     .prepare(`
       SELECT b.id, b.registration_no, b.status, m.name AS model_name
       FROM buses b JOIN bus_models m ON m.id = b.bus_model_id
@@ -269,7 +270,7 @@ function getBusSummaries(depotId) {
     `)
     .all(depotId);
 
-  const tyreCounts = db
+  const tyreCounts = await db
     .prepare(`
       SELECT current_bus_id AS bus_id, status, COUNT(*) c
       FROM tyres WHERE current_depot_id = ? AND current_bus_id IS NOT NULL
@@ -277,7 +278,7 @@ function getBusSummaries(depotId) {
     `)
     .all(depotId);
 
-  const flaggedCounts = db
+  const flaggedCounts = await db
     .prepare(`
       SELECT bus_id, COUNT(DISTINCT tyre_id) c FROM alerts
       WHERE status IN ('Open', 'Acknowledged') AND bus_id IS NOT NULL AND depot_id = ?
@@ -302,10 +303,10 @@ function getBusSummaries(depotId) {
 /**
  * Resolves the inventory list of tyres in depot storage alongside their remaining NSD
  * and storage age (in days since they were unmounted/stored).
- * 
+ *
  * @param {number|null} [depotId] - Optional depot ID filtering scope
  * @param {number} [limit=50] - Result cap list size
- * @returns {Array<object>} Tyres in store list with storage duration metrics
+ * @returns {Promise<Array<object>>} Tyres in store list with storage duration metrics
  */
 function getTyresInStoreWithAge(depotId, limit = 50) {
   const params = { limit };
@@ -314,35 +315,40 @@ function getTyresInStoreWithAge(depotId, limit = 50) {
     where += ' AND t.current_depot_id = @depotId';
     params.depotId = depotId;
   }
+  // Postgres equivalent of SQLite's julianday('now') - julianday(x): both
+  // columns are TEXT ('YYYY-MM-DD HH:MM:SS' UTC), cast to timestamp and take
+  // the day difference via EXTRACT(EPOCH FROM ...); ROUND() needs ::numeric.
   return db
     .prepare(`
       SELECT
         t.id AS tyre_id, t.tyre_number, t.brand, t.current_depot_id, d.name AS depot_name,
         (SELECT nsd_value FROM tyre_events WHERE tyre_id = t.id AND event_type = 'nsd_reading' ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_value,
-        ROUND(julianday('now') - julianday(COALESCE(
-          (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND event_type = 'send_to_store' ORDER BY event_date DESC, id DESC LIMIT 1),
-          t.updated_at
-        ))) AS days_in_storage
+        ROUND((EXTRACT(EPOCH FROM (
+          (now() AT TIME ZONE 'UTC') - COALESCE(
+            (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND event_type = 'send_to_store' ORDER BY event_date DESC, id DESC LIMIT 1),
+            t.updated_at
+          )::timestamp
+        )) / 86400.0)::numeric) AS days_in_storage
       FROM tyres t
       LEFT JOIN depots d ON d.id = t.current_depot_id
       ${where}
       ORDER BY days_in_storage DESC
       LIMIT @limit
     `)
-    .all(params);
+    .all(params); // returns a Promise -- callers must await
 }
 
 /**
  * Resolves upcoming scheduled tyre inspections (approaching interval limits, i.e., "Due").
- * 
+ *
  * @param {number|null} [depotId] - Optional depot scope filter
  * @param {number} [limit=50] - Result display limit
- * @returns {Array<object>} List of upcoming inspection items
+ * @returns {Promise<Array<object>>} List of upcoming inspection items
  */
-function getUpcomingInspections(depotId, limit = 50) {
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
-  const tyres = listInServiceTyresWithLastReading(depotId);
-  const buses = db.prepare('SELECT id, registration_no FROM buses').all();
+async function getUpcomingInspections(depotId, limit = 50) {
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const tyres = await listInServiceTyresWithLastReading(depotId);
+  const buses = await db.prepare('SELECT id, registration_no FROM buses').all();
   const busById = Object.fromEntries(buses.map((b) => [b.id, b.registration_no]));
 
   return tyres
@@ -362,21 +368,29 @@ function getUpcomingInspections(depotId, limit = 50) {
 
 /**
  * Builds the National fleet-wide KPI indicators and data dashboard payload.
- * 
- * @returns {object} High-level national dashboard dataset
+ *
+ * @returns {Promise<object>} High-level national dashboard dataset
  */
-function getNationalDashboard() {
-  const tyreStatusCounts = getTyreStatusCounts();
-  const activeAlertCounts = getActiveAlertCounts();
-  const inspectionCounts = getInspectionCounts();
-  const rotationCounts = getRotationCounts();
-  const alertCountsByParameter = getAlertCountsByParameter();
-  const lifecycleGroupCounts = getLifecycleGroupCounts();
-  const topFlaggedBuses = getTopFlaggedBuses(undefined, 10);
-  const depotComplianceScores = getDepotComplianceScores();
+async function getNationalDashboard() {
+  const [
+    tyreStatusCounts, activeAlertCounts, inspectionCounts, rotationCounts,
+    alertCountsByParameter, lifecycleGroupCounts, topFlaggedBuses, depotComplianceScores,
+    totalBusesRow, totalDepotsRow,
+  ] = await Promise.all([
+    getTyreStatusCounts(),
+    getActiveAlertCounts(),
+    getInspectionCounts(),
+    getRotationCounts(),
+    getAlertCountsByParameter(),
+    getLifecycleGroupCounts(),
+    getTopFlaggedBuses(undefined, 10),
+    getDepotComplianceScores(),
+    db.prepare('SELECT COUNT(*) c FROM buses').get(),
+    db.prepare('SELECT COUNT(*) c FROM depots').get(),
+  ]);
 
-  const totalBuses = db.prepare('SELECT COUNT(*) c FROM buses').get().c;
-  const totalDepots = db.prepare('SELECT COUNT(*) c FROM depots').get().c;
+  const totalBuses = totalBusesRow.c;
+  const totalDepots = totalDepotsRow.c;
   const totalTyres = Object.values(tyreStatusCounts).reduce((a, b) => a + b, 0);
   const totalCompliantBuses = depotComplianceScores.reduce((a, d) => a + d.compliant_buses, 0);
   const totalScoredBuses = depotComplianceScores.reduce((a, d) => a + d.total_buses, 0);
@@ -402,22 +416,28 @@ function getNationalDashboard() {
 
 /**
  * Builds depot-specific operational parameters and dashboard metrics payload.
- * 
+ *
  * @param {number} depotId - Depot ID scope
- * @returns {object} High-level depot-specific dashboard dataset
+ * @returns {Promise<object>} High-level depot-specific dashboard dataset
  */
-function getDepotDashboard(depotId) {
-  const depot = db.prepare('SELECT * FROM depots WHERE id = ?').get(depotId);
-  const tyreStatusCounts = getTyreStatusCounts(depotId);
-  const activeAlertCounts = getActiveAlertCounts(depotId);
-  const inspectionCounts = getInspectionCounts(depotId);
-  const rotationCounts = getRotationCounts(depotId);
-  const alertCountsByParameter = getAlertCountsByParameter(depotId);
-  const lifecycleGroupCounts = getLifecycleGroupCounts(depotId);
-  const busSummaries = getBusSummaries(depotId);
-  const tyresInStore = getTyresInStoreWithAge(depotId);
-  const upcomingInspections = getUpcomingInspections(depotId);
-  const compliance = getComplianceForDepot(depotId);
+async function getDepotDashboard(depotId) {
+  const [
+    depot, tyreStatusCounts, activeAlertCounts, inspectionCounts, rotationCounts,
+    alertCountsByParameter, lifecycleGroupCounts, busSummaries, tyresInStore,
+    upcomingInspections, compliance,
+  ] = await Promise.all([
+    db.prepare('SELECT * FROM depots WHERE id = ?').get(depotId),
+    getTyreStatusCounts(depotId),
+    getActiveAlertCounts(depotId),
+    getInspectionCounts(depotId),
+    getRotationCounts(depotId),
+    getAlertCountsByParameter(depotId),
+    getLifecycleGroupCounts(depotId),
+    getBusSummaries(depotId),
+    getTyresInStoreWithAge(depotId),
+    getUpcomingInspections(depotId),
+    getComplianceForDepot(depotId),
+  ]);
 
   return {
     depot,

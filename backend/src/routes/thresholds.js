@@ -1,9 +1,11 @@
 const express = require('express');
 const db = require('../db');
+const { NOW_SQL } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES } = require('../utils/roles');
 const { resolveThreshold } = require('../utils/thresholdEngine');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -54,7 +56,7 @@ const SELECT_THRESHOLD = `
   LEFT JOIN users u ON u.id = th.updated_by
 `;
 
-function validate(body) {
+async function validate(body) {
   const { parameter_type, scope_type = 'GLOBAL', scope_id, warning_min, warning_max, critical_min, critical_max } = body;
 
   if (!ALLOWED_SCOPES[parameter_type]) {
@@ -71,11 +73,11 @@ function validate(body) {
   }
 
   if (scope_type === 'DEPOT') {
-    const depot = db.prepare('SELECT id FROM depots WHERE id = ?').get(scope_id);
+    const depot = await db.prepare('SELECT id FROM depots WHERE id = ?').get(scope_id);
     if (!depot) return { error: 'scope_id does not reference a valid depot' };
   }
   if (scope_type === 'BUS_MODEL') {
-    const model = db.prepare('SELECT id FROM bus_models WHERE id = ?').get(scope_id);
+    const model = await db.prepare('SELECT id FROM bus_models WHERE id = ?').get(scope_id);
     if (!model) return { error: 'scope_id does not reference a valid bus model' };
   }
 
@@ -105,11 +107,11 @@ router.use(authenticate);
 // resolved through the same DEPOT/BUS_MODEL-override-then-GLOBAL precedence.
 // Open to every authenticated role; it's a read of already-visible limits,
 // not a scoped resource.
-router.get('/resolve', (req, res) => {
+router.get('/resolve', asyncHandler(async (req, res) => {
   const { parameter_type, depot_id, bus_model_id } = req.query;
   if (!parameter_type) return res.status(400).json({ error: 'parameter_type is required' });
 
-  const threshold = resolveThreshold(parameter_type, {
+  const threshold = await resolveThreshold(parameter_type, {
     depotId: depot_id ? Number(depot_id) : undefined,
     busModelId: bus_model_id ? Number(bus_model_id) : undefined,
   });
@@ -117,9 +119,9 @@ router.get('/resolve', (req, res) => {
   if (!threshold) return res.json(null);
   const { warning_min, warning_max, critical_min, critical_max, unit, scope_type } = threshold;
   res.json({ warning_min, warning_max, critical_min, critical_max, unit, scope_type });
-});
+}));
 
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { parameter_type, scope_type, is_active } = req.query;
   const clauses = [];
   const params = {};
@@ -138,34 +140,37 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const rows = db.prepare(`${SELECT_THRESHOLD} ${where} ORDER BY th.parameter_type, th.scope_type`).all(params);
+  const rows = await db.prepare(`${SELECT_THRESHOLD} ${where} ORDER BY th.parameter_type, th.scope_type`).all(params);
   res.json(rows);
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const row = await db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Threshold not found' });
   res.json(row);
-});
+}));
 
-router.post('/', authorize(...WRITE_ROLES), (req, res) => {
-  const result = validate(req.body || {});
+router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const result = await validate(req.body || {});
   if (result.error) return res.status(400).json({ error: result.error });
 
   const { parameter_type, scope_type = 'GLOBAL', unit } = req.body;
 
-  const existing = db
+  // Postgres can't infer a bare parameter's type from `? IS NULL` alone (no
+  // typed column on either side to anchor it) the way SQLite tolerated --
+  // an explicit ::integer cast resolves it.
+  const existing = await db
     .prepare(`
       SELECT id FROM thresholds
       WHERE parameter_type = ? AND scope_type = ? AND is_active = 1
-        AND ((scope_id IS NULL AND ? IS NULL) OR scope_id = ?)
+        AND ((scope_id IS NULL AND ?::integer IS NULL) OR scope_id = ?)
     `)
     .get(parameter_type, scope_type, result.scope_id, result.scope_id);
   if (existing) {
     return res.status(409).json({ error: 'An active threshold already exists for this parameter and scope. Edit it instead.' });
   }
 
-  const info = db
+  const info = await db
     .prepare(`
       INSERT INTO thresholds (parameter_type, scope_type, scope_id, warning_min, warning_max, critical_min, critical_max, unit, updated_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -182,13 +187,13 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
       req.user.id
     );
 
-  const created = db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(info.lastInsertRowid);
-  writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'threshold', entityId: created.id, after: created });
+  const created = await db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(info.lastInsertRowid);
+  await writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'threshold', entityId: created.id, after: created });
   res.status(201).json(created);
-});
+}));
 
-router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
-  const before = db.prepare('SELECT * FROM thresholds WHERE id = ?').get(req.params.id);
+router.put('/:id', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM thresholds WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Threshold not found' });
 
   const merged = {
@@ -202,14 +207,14 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
     ...req.body,
   };
 
-  const result = validate(merged);
+  const result = await validate(merged);
   if (result.error) return res.status(400).json({ error: result.error });
 
   const unit = req.body?.unit ?? before.unit;
 
-  db.prepare(`
+  await db.prepare(`
     UPDATE thresholds
-    SET warning_min = ?, warning_max = ?, critical_min = ?, critical_max = ?, unit = ?, updated_by = ?, updated_at = datetime('now')
+    SET warning_min = ?, warning_max = ?, critical_min = ?, critical_max = ?, unit = ?, updated_by = ?, updated_at = ${NOW_SQL}
     WHERE id = ?
   `).run(
     result.normalized.warning_min,
@@ -221,24 +226,24 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
     req.params.id
   );
 
-  const after = db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'threshold', entityId: after.id, before, after });
+  const after = await db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'threshold', entityId: after.id, before, after });
   res.json(after);
-});
+}));
 
-router.patch('/:id/deactivate', authorize(...WRITE_ROLES), (req, res) => {
-  const before = db.prepare('SELECT * FROM thresholds WHERE id = ?').get(req.params.id);
+router.patch('/:id/deactivate', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM thresholds WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Threshold not found' });
 
   if (before.scope_type === 'GLOBAL') {
     return res.status(409).json({ error: 'Global thresholds cannot be deactivated, only overridden values changed' });
   }
 
-  db.prepare(`UPDATE thresholds SET is_active = 0, updated_by = ?, updated_at = datetime('now') WHERE id = ?`).run(req.user.id, req.params.id);
+  await db.prepare(`UPDATE thresholds SET is_active = 0, updated_by = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(req.user.id, req.params.id);
 
-  const after = db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'threshold', entityId: after.id, before, after });
+  const after = await db.prepare(`${SELECT_THRESHOLD} WHERE th.id = ?`).get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'threshold', entityId: after.id, before, after });
   res.json(after);
-});
+}));
 
 module.exports = router;

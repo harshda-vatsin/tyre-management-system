@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Warehouse, Bus, CircleDot, ScanLine, ClipboardList,
   ListChecks, AlertTriangle, CalendarCheck, FileBarChart, Users as UsersIcon,
   SlidersHorizontal, History, Menu, X, LogOut, Truck, Settings, Package as PackageIcon,
-  RotateCw, Gauge,
+  RotateCw, Gauge, FileSpreadsheet,
 } from 'lucide-react';
 import { useAuth } from './AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
@@ -62,6 +62,7 @@ const NAV_GROUPS = [
       { to: '/admin/users', label: 'Users', icon: UsersIcon, roles: [ROLES.ADMIN] },
       { to: '/admin/thresholds', label: 'Thresholds', icon: SlidersHorizontal },
       { to: '/admin/settings', label: 'System Parameters', icon: Settings, roles: [ROLES.ADMIN] },
+      { to: '/admin/mis-import', label: 'MIS Excel Import', icon: FileSpreadsheet, roles: [ROLES.ADMIN] },
     ],
   },
 ];

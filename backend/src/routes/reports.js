@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth');
 const { REPORTS } = require('../utils/reportService');
 const { buildXlsx, buildPdf } = require('../utils/exportService');
 const { isDepotScoped } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ router.use(authenticate);
 
 // Applies RBAC depot scoping per report shape. Depot-scoped roles cannot see
 // another depot's data regardless of what filters the client sends.
-function scopeFilters(key, filters, user) {
+async function scopeFilters(key, filters, user) {
   if (!isDepotScoped(user)) return { filters, error: null };
 
   if (key === 'inter-bus-transfer') {
@@ -23,14 +24,14 @@ function scopeFilters(key, filters, user) {
   }
   if (key === 'tyre-history') {
     if (filters.tyre_number) {
-      const tyre = db.prepare('SELECT current_depot_id FROM tyres WHERE tyre_number = ?').get(filters.tyre_number);
+      const tyre = await db.prepare('SELECT current_depot_id FROM tyres WHERE tyre_number = ?').get(filters.tyre_number);
       if (tyre && tyre.current_depot_id !== user.depot_id) return { filters, error: 'Not authorized for this tyre' };
     }
     return { filters, error: null };
   }
   if (key === 'bus-tyre-health') {
     if (filters.bus_id) {
-      const bus = db.prepare('SELECT depot_id FROM buses WHERE id = ?').get(filters.bus_id);
+      const bus = await db.prepare('SELECT depot_id FROM buses WHERE id = ?').get(filters.bus_id);
       if (bus && bus.depot_id !== Number(user.depot_id)) return { filters, error: 'Not authorized for this bus' };
       return { filters, error: null };
     }
@@ -42,14 +43,16 @@ function scopeFilters(key, filters, user) {
 
 // Export headers show human-readable filter values (depot/bus names), not
 // raw IDs -- resolved once here rather than at every call site.
-function displayFilters(schema, filters) {
+async function displayFilters(schema, filters) {
   const display = { ...filters };
   for (const f of schema) {
     if ((f.type === 'depot') && display[f.key]) {
-      display[f.key] = db.prepare('SELECT name FROM depots WHERE id = ?').get(display[f.key])?.name ?? display[f.key];
+      const depot = await db.prepare('SELECT name FROM depots WHERE id = ?').get(display[f.key]);
+      display[f.key] = depot?.name ?? display[f.key];
     }
     if (f.type === 'bus' && display[f.key]) {
-      display[f.key] = db.prepare('SELECT registration_no FROM buses WHERE id = ?').get(display[f.key])?.registration_no ?? display[f.key];
+      const bus = await db.prepare('SELECT registration_no FROM buses WHERE id = ?').get(display[f.key]);
+      display[f.key] = bus?.registration_no ?? display[f.key];
     }
   }
   return display;
@@ -73,12 +76,12 @@ router.get('/', (req, res) => {
   );
 });
 
-router.get('/:key', (req, res) => {
+router.get('/:key', asyncHandler(async (req, res) => {
   const report = REPORTS[req.params.key];
   if (!report) return res.status(404).json({ error: 'Unknown report' });
 
   const rawFilters = parseFilters(report.filters, req.query);
-  const { filters, error } = scopeFilters(req.params.key, rawFilters, req.user);
+  const { filters, error } = await scopeFilters(req.params.key, rawFilters, req.user);
   if (error) return res.status(403).json({ error });
 
   const missingRequired = report.filters.find((f) => f.required && !filters[f.key]);
@@ -88,7 +91,7 @@ router.get('/:key', (req, res) => {
     return res.status(400).json({ error: 'Either Depot or Bus filter is required' });
   }
 
-  const allRows = report.getRows(filters);
+  const allRows = await report.getRows(filters);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
   const offset = (page - 1) * pageSize;
@@ -101,9 +104,9 @@ router.get('/:key', (req, res) => {
     columns: report.columns,
     filters: report.filters,
   });
-});
+}));
 
-router.get('/:key/export', async (req, res) => {
+router.get('/:key/export', asyncHandler(async (req, res) => {
   const report = REPORTS[req.params.key];
   if (!report) return res.status(404).json({ error: 'Unknown report' });
 
@@ -111,7 +114,7 @@ router.get('/:key/export', async (req, res) => {
   if (!['xlsx', 'pdf'].includes(format)) return res.status(400).json({ error: 'format must be xlsx or pdf' });
 
   const rawFilters = parseFilters(report.filters, req.query);
-  const { filters, error } = scopeFilters(req.params.key, rawFilters, req.user);
+  const { filters, error } = await scopeFilters(req.params.key, rawFilters, req.user);
   if (error) return res.status(403).json({ error });
 
   const missingRequired = report.filters.find((f) => f.required && !filters[f.key]);
@@ -121,13 +124,13 @@ router.get('/:key/export', async (req, res) => {
     return res.status(400).json({ error: 'Either Depot or Bus filter is required' });
   }
 
-  const rows = report.getRows(filters); // full, unpaginated
+  const rows = await report.getRows(filters); // full, unpaginated
   const meta = {
     reportName: report.name,
     generatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
     generatedByUsername: req.user.username,
     filterSchema: report.filters,
-    filters: displayFilters(report.filters, filters),
+    filters: await displayFilters(report.filters, filters),
     columns: report.columns,
     rows,
   };
@@ -144,6 +147,6 @@ router.get('/:key/export', async (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
   buildPdf(meta, res);
-});
+}));
 
 module.exports = router;

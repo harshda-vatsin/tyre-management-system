@@ -1,478 +1,281 @@
 /**
  * @file db.js
- * @description SQLite database initialization and schema creation module.
- * Establishes a database connection using better-sqlite3, sets performance-enhancing
- * SQLite pragmas, and declares the schemas (with relational constraints and indexes)
- * for all primary system entities (depots, users, bus_models, buses, tyres, tyre_events,
- * thresholds, alerts, and audit_log).
+ * @description PostgreSQL connection layer (migrated from better-sqlite3).
+ * Exposes a better-sqlite3-shaped API -- db.prepare(sql).get/all/run(params),
+ * db.transaction(fn), db.exec(sql) -- backed by a real `pg` Pool, so the vast
+ * majority of call sites across routes/ and utils/ only need `await` added,
+ * not their SQL rewritten. See the "Call-shape compatibility" notes below
+ * for exactly what is and isn't transparent.
+ *
+ * Schema: the CREATE TABLE/INDEX statements below are a straight port of the
+ * final SQLite schema (see git history for the original db.js) -- the many
+ * ALTER TABLE/rebuild migrations that used to follow them existed only to
+ * upgrade a pre-existing SQLite file across schema versions and don't apply
+ * to a fresh database, so they aren't ported.
  */
 
-const fs = require('fs');
-const path = require('path');
-const Database = require('better-sqlite3');
+const { Pool, types } = require('pg');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { EVENT_OUTCOMES } = require('./utils/tyreLifecycle');
 
-// Resolve the absolute file path to the SQLite storage file
-const DB_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DB_DIR, 'ebtms.sqlite');
-
-// backend/data/ holds only gitignored *.sqlite* files, so a fresh clone has
-// no such directory on disk -- better-sqlite3 cannot create the DB file
-// inside a missing directory, so ensure it exists first.
-fs.mkdirSync(DB_DIR, { recursive: true });
-
-// Open the connection to the SQLite database
-const db = new Database(DB_PATH);
-
-// Set performance pragmas:
-// WAL (Write-Ahead Logging) mode allows simultaneous read operations while writing.
-db.pragma('journal_mode = WAL');
-// Force SQLite to enforce foreign key relational reference rules and deletion constraints.
-db.pragma('foreign_keys = ON');
-
-// Execute DDL statements to ensure all tables exist with correct schemas
-db.exec(`
-  CREATE TABLE IF NOT EXISTS depots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    code TEXT NOT NULL UNIQUE,
-    region TEXT,
-    address TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+// Generates the tyre_events.outcome CHECK constraint directly from
+// EVENT_OUTCOMES (utils/tyreLifecycle.js) instead of hand-copying its
+// values into SQL -- this is the fix for the warranty/retread outcome
+// mismatch: two event types write to the same `outcome` column but mean
+// different things by it (a binary vendor result vs. a three-state claim
+// workflow), and a hardcoded `outcome IN (...)` list can only ever
+// validate one of those vocabularies, silently rejecting the other. The
+// generated constraint is event-type-aware, and there is exactly one place
+// in the codebase that spells out what "approved" or "Done" mean --
+// tyreEvents.js's handlers validate against the same EVENT_OUTCOMES map,
+// so the DB and the application can never drift apart on this again.
+function buildOutcomeCheckSql() {
+  const perEventType = Object.entries(EVENT_OUTCOMES).map(
+    ([eventType, values]) => `(event_type = '${eventType}' AND outcome IN (${values.map((v) => `'${v}'`).join(', ')}))`
   );
-
-  -- Contractual/route grouping, independent of Depot (a real operator's MIS
-  -- tracks both as separate per-bus/per-tyre attributes, not a hierarchy --
-  -- see utils/tyreLifecycle.js-adjacent MIS Depth Expansion notes).
-  CREATE TABLE IF NOT EXISTS packages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    code TEXT NOT NULL UNIQUE,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- SRS section 6 role names: System Administrator, National Fleet Manager,
-  -- Depot Manager, Tyre Supervisor, Read-Only Auditor.
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    full_name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('System Administrator', 'National Fleet Manager', 'Depot Manager', 'Tyre Supervisor', 'Read-Only Auditor')),
-    depot_id INTEGER REFERENCES depots(id),
-    is_active INTEGER NOT NULL DEFAULT 1,
-    last_login TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- FR-BM-XX: tyre position template per bus model archetype. Buses inherit
-  -- their position layout by reference (bus_model_id), not by copying it.
-  -- num_positions is the only admin-entered value; position_labels_json is
-  -- derived from it server-side against a fixed predefined table
-  -- (utils/busLayout.js) -- there is no manual axle/position builder.
-  CREATE TABLE IF NOT EXISTS bus_models (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    manufacturer TEXT,
-    num_positions INTEGER NOT NULL CHECK (num_positions > 0),
-    position_labels_json TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- FR-BM-01: bus master record. bus_model_id fulfils both the "Model / Make"
-  -- field and FR-BM-02 tyre-position inheritance in one relation.
-  CREATE TABLE IF NOT EXISTS buses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    depot_id INTEGER NOT NULL REFERENCES depots(id),
-    package_id INTEGER REFERENCES packages(id),
-    registration_no TEXT NOT NULL UNIQUE,
-    chassis_no TEXT NOT NULL UNIQUE,
-    bus_model_id INTEGER NOT NULL REFERENCES bus_models(id),
-    year_of_manufacture INTEGER,
-    date_of_entry_into_fleet TEXT,
-    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Under Maintenance', 'Decommissioned')),
-    odometer_km INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- FR-TC-01: tyre master ("tyre card" event history is a later milestone).
-  -- Simplified operational status model (see utils/tyreLifecycle.js): a
-  -- status only ever answers "where is the tyre right now" -- never "what
-  -- action was just taken", which is what tyre_events/the timeline is for.
-  -- 'Inspection Due'/'Rotation Due' are deliberately NOT in this list --
-  -- those are read-computed (see inspectionService.js / rotationService.js),
-  -- never written to this column, so a "due" state can never appear here as
-  -- a silent status flip.
-  CREATE TABLE IF NOT EXISTS tyres (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tyre_number TEXT NOT NULL UNIQUE,
-    brand TEXT NOT NULL,
-    model TEXT,
-    size TEXT,
-    pattern TEXT,
-    ply_rating TEXT,
-    purchase_date TEXT,
-    initial_nsd REAL,
-    purchase_cost REAL,
-    status TEXT NOT NULL DEFAULT 'In Store' CHECK (status IN (
-      'In Store', 'Active', 'Under Repair', 'Under Retread', 'Warranty', 'Scrapped'
-    )),
-    current_bus_id INTEGER REFERENCES buses(id),
-    current_position TEXT,
-    current_depot_id INTEGER REFERENCES depots(id),
-    current_package_id INTEGER REFERENCES packages(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- FR-TC-02: permanent, append-only tyre card event log. One row per event;
-  -- rows are never updated or deleted (NFR-07). "position"/"bus_id"/"depot_id"
-  -- hold the tyre's context AT the event (destination side for moves); the
-  -- from_* columns hold the origin side for rotation/replacement/transfer.
-  -- flag_status is reserved for the threshold-evaluation milestone -- it is
-  -- written by nothing in this milestone and always stored NULL.
-  -- Enterprise Lifecycle expansion: 9 new event types added alongside the
-  -- original 8 (unchanged) to cover procurement intake, fitment, inspection
-  -- sign-off, retread, warranty, and scrap. repair_cost/retread_cost/
-  -- scrap_value/vendor_name are nullable financial/vendor fields -- start
-  -- capturing this data from now on without forcing a backfill on old rows.
-  -- system_backfilled marks historically-reconstructed events (see
-  -- migrations/backfillLifecycleEvents.js) so the UI can flag them distinctly.
-  CREATE TABLE IF NOT EXISTS tyre_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tyre_id INTEGER NOT NULL REFERENCES tyres(id),
-    event_type TEXT NOT NULL CHECK (event_type IN (
-      'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
-      'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
-      'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-      'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim', 'scrap', 'scrap_disposal'
-    )),
-    event_date TEXT NOT NULL DEFAULT (datetime('now')),
-    bus_id INTEGER REFERENCES buses(id),
-    position TEXT,
-    depot_id INTEGER REFERENCES depots(id),
-    from_bus_id INTEGER REFERENCES buses(id),
-    from_position TEXT,
-    from_depot_id INTEGER REFERENCES depots(id),
-    to_bus_id INTEGER REFERENCES buses(id),
-    to_position TEXT,
-    to_depot_id INTEGER REFERENCES depots(id),
-    related_tyre_id INTEGER REFERENCES tyres(id),
-    nsd_value REAL,
-    -- Excel Parity Gap-Closure: optional 4-groove tread depth capture for
-    -- nsd_reading -- nsd_value stays the authoritative single figure
-    -- (auto-computed as min(g1..g4) when all 4 are supplied), so every
-    -- other event type and every existing report keeps reading nsd_value
-    -- exactly as before.
-    nsd_g1 REAL,
-    nsd_g2 REAL,
-    nsd_g3 REAL,
-    nsd_g4 REAL,
-    pressure_value REAL,
-    repair_type TEXT CHECK (repair_type IN ('plug', 'patch', 'tube')),
-    reason TEXT,
-    stored_at TEXT,
-    odometer_km INTEGER,
-    notes TEXT,
-    flag_status TEXT,
-    repair_cost REAL,
-    retread_cost REAL,
-    scrap_value REAL,
-    vendor_name TEXT,
-    -- MIS Depth Expansion: vendor-transaction and repair-detail fields,
-    -- nullable so nothing forces a backfill on rows already written.
-    gate_pass_no TEXT,
-    invoice_no TEXT,
-    invoice_date TEXT,
-    vendor_location TEXT,
-    approved_by TEXT,
-    supervisor_name TEXT,
-    tyre_man_name TEXT,
-    patch_size TEXT,
-    -- Excel Parity Gap-Closure: retread_purpose (retread_sent) and outcome
-    -- (retread_completed) are self-referencing CHECKs only, so existing
-    -- NULL rows remain valid -- no rebuild needed for these two.
-    retread_purpose TEXT CHECK (retread_purpose IS NULL OR retread_purpose IN ('Retread', 'Cut Repair')),
-    outcome TEXT CHECK (outcome IS NULL OR outcome IN ('Done', 'Rejected')),
-    store_manager TEXT,
-    system_backfilled INTEGER NOT NULL DEFAULT 0,
-    performed_by INTEGER REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- SRS 8.1: one row per (parameter_type, scope). warning_min/max and
-  -- critical_min/max cover both single-bound parameters (NSD, inspection
-  -- interval, escalation days use only *_max) and banded ones (pressure uses
-  -- both min and max at each severity level).
-  -- Allowed scope per parameter (enforced in routes/thresholds.js):
-  --   NSD                 -> GLOBAL | DEPOT
-  --   PRESSURE            -> GLOBAL | BUS_MODEL
-  --   INSPECTION_INTERVAL -> GLOBAL only
-  --   ESCALATION_DAYS     -> GLOBAL only
-  -- Tyre Card Amendment / Correction workflow. tyre_events rows are never
-  -- updated or deleted (NFR-07) -- a correction is instead layered on top as
-  -- its own append-only row here, so the original event and every past
-  -- correction remain in the audit trail. corrected_values_json only holds
-  -- the fields the user actually changed (a sparse patch), not a full copy
-  -- of the event.
-  CREATE TABLE IF NOT EXISTS tyre_event_amendments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    original_event_id INTEGER NOT NULL REFERENCES tyre_events(id),
-    corrected_values_json TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    amended_by INTEGER REFERENCES users(id),
-    amended_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS thresholds (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    parameter_type TEXT NOT NULL CHECK (parameter_type IN (
-      'NSD', 'PRESSURE', 'INSPECTION_INTERVAL', 'ESCALATION_DAYS', 'ROTATION_INTERVAL',
-      'ROTATION_INTERVAL_KM', 'TOE', 'CASTER', 'CAMBER', 'SAI'
-    )),
-    scope_type TEXT NOT NULL DEFAULT 'GLOBAL' CHECK (scope_type IN ('GLOBAL', 'DEPOT', 'BUS_MODEL')),
-    scope_id INTEGER,
-    warning_min REAL,
-    warning_max REAL,
-    critical_min REAL,
-    critical_max REAL,
-    unit TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    updated_by INTEGER REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- MIS Depth Expansion: Wheel Alignment is bus-scoped (axle geometry), not
-  -- tyre-scoped, so it's its own table pair rather than tyre_events rows.
-  -- due_date is plain user-entered (the workshop schedules the next service
-  -- directly) -- never derived from an average-km/day projection.
-  CREATE TABLE IF NOT EXISTS wheel_alignments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bus_id INTEGER NOT NULL REFERENCES buses(id),
-    depot_id INTEGER REFERENCES depots(id),
-    package_id INTEGER REFERENCES packages(id),
-    alignment_date TEXT NOT NULL DEFAULT (datetime('now')),
-    current_km INTEGER,
-    due_date TEXT,
-    status TEXT NOT NULL DEFAULT 'Done' CHECK (status IN ('Done', 'Pending')),
-    remarks TEXT,
-    performed_by INTEGER REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- One row per axle position per alignment record; before/after pairs
-  -- mirror the source MIS sheet's layout exactly. Values are decimal
-  -- degrees (e.g. 0º12' stored as 0.2), not degree-minute strings.
-  CREATE TABLE IF NOT EXISTS wheel_alignment_measurements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    alignment_id INTEGER NOT NULL REFERENCES wheel_alignments(id),
-    position TEXT NOT NULL,
-    toe_before REAL,
-    toe_after REAL,
-    caster_before REAL,
-    caster_after REAL,
-    camber_before REAL,
-    camber_after REAL,
-    sai_before REAL,
-    sai_after REAL
-  );
-
-  CREATE TABLE IF NOT EXISTS alerts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tyre_id INTEGER NOT NULL REFERENCES tyres(id),
-    bus_id INTEGER REFERENCES buses(id),
-    depot_id INTEGER REFERENCES depots(id),
-    parameter_type TEXT NOT NULL CHECK (parameter_type IN ('NSD', 'PRESSURE', 'INSPECTION', 'ROTATION')),
-    severity TEXT NOT NULL CHECK (severity IN ('Warning', 'Critical')),
-    status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Acknowledged', 'Resolved')),
-    triggering_event_id INTEGER REFERENCES tyre_events(id),
-    reading_value REAL,
-    threshold_value REAL,
-    opened_at TEXT NOT NULL DEFAULT (datetime('now')),
-    acknowledged_at TEXT,
-    acknowledged_by INTEGER REFERENCES users(id),
-    resolved_at TEXT,
-    resolved_by INTEGER REFERENCES users(id),
-    resolution_note TEXT,
-    escalation_level INTEGER NOT NULL DEFAULT 0,
-    escalated_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- SRS §8.3: system-wide display/config parameters (pressure unit today;
-  -- a plain key/value store rather than dedicated columns so future
-  -- parameters -- SMTP config, inspection reminder cadence, etc. -- don't
-  -- each need their own migration).
-  CREATE TABLE IF NOT EXISTS system_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_by INTEGER REFERENCES users(id),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(id),
-    username TEXT,
-    action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER', 'AMEND_EVENT')),
-    entity_type TEXT NOT NULL,
-    entity_id TEXT,
-    before_json TEXT,
-    after_json TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  -- Database indexes to optimize performance of frequent lookups and joins
-  CREATE INDEX IF NOT EXISTS idx_buses_depot ON buses(depot_id);
-  CREATE INDEX IF NOT EXISTS idx_buses_model ON buses(bus_model_id);
-  CREATE INDEX IF NOT EXISTS idx_tyres_bus ON tyres(current_bus_id);
-  CREATE INDEX IF NOT EXISTS idx_tyres_depot ON tyres(current_depot_id);
-  CREATE INDEX IF NOT EXISTS idx_tyres_status ON tyres(status);
-  CREATE INDEX IF NOT EXISTS idx_wheel_alignments_bus ON wheel_alignments(bus_id, alignment_date);
-  CREATE INDEX IF NOT EXISTS idx_wheel_alignment_measurements_alignment ON wheel_alignment_measurements(alignment_id);
-  CREATE INDEX IF NOT EXISTS idx_tyre_events_tyre ON tyre_events(tyre_id, event_date);
-  CREATE INDEX IF NOT EXISTS idx_tyre_events_type ON tyre_events(event_type);
-  CREATE INDEX IF NOT EXISTS idx_tyre_events_bus ON tyre_events(bus_id);
-  CREATE INDEX IF NOT EXISTS idx_alerts_tyre ON alerts(tyre_id);
-  CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
-  -- FR-AL-02: only one active (Open/Acknowledged) alert per tyre+parameter.
-  -- The app layer already upserts instead of duplicating; this is a data-
-  -- integrity backstop, not the primary enforcement mechanism.
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_active_unique ON alerts(tyre_id, parameter_type) WHERE status IN ('Open', 'Acknowledged');
-  CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
-  CREATE INDEX IF NOT EXISTS idx_tyre_event_amendments_event ON tyre_event_amendments(original_event_id, amended_at);
-  CREATE INDEX IF NOT EXISTS idx_users_depot ON users(depot_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_thresholds_scope ON thresholds(parameter_type, scope_type, scope_id) WHERE is_active = 1;
-`);
-
-// Lightweight migration: CREATE TABLE IF NOT EXISTS above only applies to a
-// fresh database, so an existing ebtms.sqlite predating the depots.is_active
-// column needs it added explicitly.
-const depotColumns = db.prepare('PRAGMA table_info(depots)').all().map((c) => c.name);
-if (!depotColumns.includes('is_active')) {
-  db.exec('ALTER TABLE depots ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+  return `outcome IS NULL OR ${perEventType.join(' OR ')}`;
 }
 
-// SRS §8.3: pressure unit defaults to PSI (matches every existing threshold
-// and reading already stored in PSI) until an Admin changes it.
-db.prepare('INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)').run('pressure_unit', 'PSI');
+// Postgres's COUNT(*)/SUM() etc. return the wire type `bigint` (OID 20),
+// which `pg` parses as a JS string by default (to avoid silent precision
+// loss above Number.MAX_SAFE_INTEGER). Nothing in this app's counts
+// (buses/tyres/events per query) will ever approach that, and every one of
+// the ~15 route/service files doing `.get(params).c` or similar expects a
+// plain JS number the way better-sqlite3 always returned it -- so this is
+// registered once, globally, instead of adding a ::int cast at every one of
+// those call sites (and every future one).
+types.setTypeParser(20, (value) => parseInt(value, 10));
 
-// FR-BM-XX superseded the axle/left-right builder with a predefined
-// tyre-count layout table, so the columns backing the old model are dropped
-// from any pre-existing database file.
-const busModelColumns = db.prepare('PRAGMA table_info(bus_models)').all().map((c) => c.name);
-if (busModelColumns.includes('axle_layout_json')) {
-  db.exec('ALTER TABLE bus_models DROP COLUMN axle_layout_json');
-}
-if (busModelColumns.includes('axle_configuration')) {
-  db.exec('ALTER TABLE bus_models DROP COLUMN axle_configuration');
-}
+// DATABASE_URL follows the standard postgres:// connection-string convention
+// (set automatically by most hosts -- Heroku, Railway, Render, RDS, etc).
+// Falls back to the local dev Docker container (see README/CLAUDE.md) when
+// unset.
+const connectionString = process.env.DATABASE_URL || 'postgres://postgres:devpassword@localhost:5432/ebtms';
+const pool = new Pool({ connectionString });
 
-// Tyre Card Amendment workflow needs a new AMEND_EVENT audit action. SQLite
-// has no ALTER TABLE support for changing a CHECK constraint in place, so an
-// audit_log table predating this migration is rebuilt column-for-column
-// under its existing name, preserving every row already written to it.
-const auditLogTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").get();
-if (auditLogTable && !auditLogTable.sql.includes('AMEND_EVENT')) {
-  db.exec(`
-    ALTER TABLE audit_log RENAME TO audit_log_old;
-    CREATE TABLE audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER REFERENCES users(id),
-      username TEXT,
-      action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER', 'AMEND_EVENT')),
-      entity_type TEXT NOT NULL,
-      entity_id TEXT,
-      before_json TEXT,
-      after_json TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    INSERT INTO audit_log SELECT * FROM audit_log_old;
-    DROP TABLE audit_log_old;
-    CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
-  `);
+// Holds the pg client currently checked out for an in-flight transaction, so
+// nested db.prepare(...).run()/.get()/.all() calls made *inside* a
+// db.transaction() callback run on that same client/connection instead of
+// each grabbing a fresh one from the pool -- which would silently execute
+// outside the transaction and defeat atomicity.
+const txContext = new AsyncLocalStorage();
+function currentClient() {
+  return txContext.getStore() || pool;
 }
 
-// ---------------------------------------------------------------------------
-// Enterprise Lifecycle expansion migrations. Simple column additions use
-// ALTER TABLE ADD COLUMN (safe, no rebuild). CHECK-constraint changes need a
-// full table rebuild since SQLite cannot alter a CHECK in place; tyres and
-// tyre_events are referenced by other tables' foreign keys, so the rebuild
-// runs with foreign_keys temporarily OFF and verifies integrity with
-// PRAGMA foreign_key_check before turning it back on, per SQLite's
-// documented procedure for restructuring a referenced table.
-// ---------------------------------------------------------------------------
+// --- Call-shape compatibility with the previous better-sqlite3 API --------
+//
+// 1. Placeholders: SQL strings across the codebase use either positional
+//    '?' or named '@name' placeholders (better-sqlite3 supports both).
+//    Postgres only understands positional '$1, $2, ...'. translate() walks
+//    the SQL text left-to-right and assigns $-indexes in the order
+//    placeholders actually appear, pulling '@name' values out of the params
+//    object and '?' values out of the params array by position -- this
+//    matters for the several routes that build a WHERE clause dynamically
+//    (clauses.push(...); params.foo = ...) since those params objects are
+//    *not* guaranteed to be in placeholder order otherwise.
+//
+// 2. lastInsertRowid: better-sqlite3's .run() on an INSERT returns the new
+//    row's rowid for free. Postgres has no equivalent -- every table's
+//    primary key in this schema is literally named `id`, so run()
+//    transparently appends `RETURNING id` to any INSERT that doesn't
+//    already declare a RETURNING clause, and surfaces it the same way.
+//
+// 3. db.transaction(fn) returns a wrapped function (matching
+//    better-sqlite3's shape exactly: `db.transaction(() => {...})()`), so
+//    existing call sites only need `await` added in front of the second
+//    `()`, not restructuring. Nested transactions (utils/tyreEvents.js's
+//    createTyreEvent is itself wrapped in db.transaction() and is called
+//    from inside routes/tyres.js's and utils/bulkImport.js's own
+//    transactions) use a SAVEPOINT instead of a fresh BEGIN.
+function translate(sql, params) {
+  const values = [];
+  let i = 0;
+  const text = sql.replace(/\?|@(\w+)/g, (match, name) => {
+    i += 1;
+    values.push(name ? params[name] : params[i - 1]);
+    return `$${i}`;
+  });
+  return { text, values };
+}
 
-const tyreColumns = db.prepare('PRAGMA table_info(tyres)').all().map((c) => c.name);
-if (!tyreColumns.includes('purchase_cost')) {
-  db.exec('ALTER TABLE tyres ADD COLUMN purchase_cost REAL');
-}
-if (!tyreColumns.includes('current_package_id')) {
-  db.exec('ALTER TABLE tyres ADD COLUMN current_package_id INTEGER REFERENCES packages(id)');
-}
-if (!tyreColumns.includes('pattern')) {
-  db.exec('ALTER TABLE tyres ADD COLUMN pattern TEXT');
-}
-if (!tyreColumns.includes('ply_rating')) {
-  db.exec('ALTER TABLE tyres ADD COLUMN ply_rating TEXT');
-}
-db.exec('CREATE INDEX IF NOT EXISTS idx_tyres_package ON tyres(current_package_id)');
-
-const busColumns = db.prepare('PRAGMA table_info(buses)').all().map((c) => c.name);
-if (!busColumns.includes('package_id')) {
-  db.exec('ALTER TABLE buses ADD COLUMN package_id INTEGER REFERENCES packages(id)');
-}
-db.exec('CREATE INDEX IF NOT EXISTS idx_buses_package ON buses(package_id)');
-
-const tyreEventColumns = db.prepare('PRAGMA table_info(tyre_events)').all().map((c) => c.name);
-const NEW_EVENT_COLUMN_TYPES = {
-  repair_cost: 'REAL', retread_cost: 'REAL', scrap_value: 'REAL', vendor_name: 'TEXT',
-  gate_pass_no: 'TEXT', invoice_no: 'TEXT', invoice_date: 'TEXT', vendor_location: 'TEXT',
-  approved_by: 'TEXT', supervisor_name: 'TEXT', tyre_man_name: 'TEXT', patch_size: 'TEXT',
-  nsd_g1: 'REAL', nsd_g2: 'REAL', nsd_g3: 'REAL', nsd_g4: 'REAL', store_manager: 'TEXT',
-};
-for (const [col, type] of Object.entries(NEW_EVENT_COLUMN_TYPES)) {
-  if (!tyreEventColumns.includes(col)) {
-    db.exec(`ALTER TABLE tyre_events ADD COLUMN ${col} ${type}`);
+// better-sqlite3's .get()/.all()/.run() accept bind parameters three ways:
+// a single array, a single named-params object, or multiple positional
+// arguments spread directly (`.get(a, b, c)` -- the most common shape in
+// this codebase, e.g. routes/tyres.js's
+// `.get(current_bus_id, current_position, excludeTyreId || 0)`). args here
+// is already the full arguments array from a rest-param call site.
+function normalizeParams(args) {
+  if (args.length === 0) return [];
+  if (args.length === 1) {
+    const only = args[0];
+    if (Array.isArray(only)) return only;
+    if (only !== null && typeof only === 'object') return only; // named-params object
+    return [only]; // single positional value, e.g. .get(id)
   }
-}
-if (!tyreEventColumns.includes('system_backfilled')) {
-  db.exec('ALTER TABLE tyre_events ADD COLUMN system_backfilled INTEGER NOT NULL DEFAULT 0');
-}
-// Excel Parity Gap-Closure: retread_purpose/outcome are self-referencing
-// CHECKs only, so ADD COLUMN is valid without a full table rebuild.
-if (!tyreEventColumns.includes('retread_purpose')) {
-  db.exec(`ALTER TABLE tyre_events ADD COLUMN retread_purpose TEXT CHECK (retread_purpose IS NULL OR retread_purpose IN ('Retread', 'Cut Repair'))`);
-}
-if (!tyreEventColumns.includes('outcome')) {
-  db.exec(`ALTER TABLE tyre_events ADD COLUMN outcome TEXT CHECK (outcome IS NULL OR outcome IN ('Done', 'Rejected'))`);
+  return args; // multiple positional values, e.g. .run(a, b, c)
 }
 
-// Status-model simplification: collapses whatever wide vocabulary a tyre's
-// status currently holds (the original 4-value model, or the ~26-value
-// granular expansion that briefly replaced it) down to the 6 operational
-// statuses in utils/tyreLifecycle.js. The CASE mirrors LEGACY_STATUS_MAP
-// there exactly -- every value either model has ever written is covered,
-// with an ELSE fallback to 'In Store' as a last resort for anything
-// unrecognized. tyre_events (the actual history) is untouched by this.
-const tyresTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tyres'").get();
-if (tyresTable && !tyresTable.sql.includes("'Under Retread'")) {
-  db.pragma('foreign_keys = OFF');
-  db.pragma('legacy_alter_table = ON');
-  db.exec(`
-    ALTER TABLE tyres RENAME TO tyres_old;
-    CREATE TABLE tyres (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+function withReturningId(sql) {
+  const isInsert = /^\s*insert\s+into/i.test(sql);
+  const hasReturning = /\breturning\b/i.test(sql);
+  // Every INSERT target in this schema has an `id` primary key except
+  // system_settings (key TEXT PRIMARY KEY) -- both places that insert into
+  // it (this file's seed insert, routes/settings.js's upsert) use
+  // ON CONFLICT, so gating on that keeps the RETURNING-id assumption safe
+  // without needing a table-name allowlist.
+  const isUpsert = /\bon\s+conflict\b/i.test(sql);
+  return isInsert && !hasReturning && !isUpsert ? `${sql.replace(/;\s*$/, '')} RETURNING id` : sql;
+}
+
+function prepare(sql) {
+  return {
+    async get(...args) {
+      const { text, values } = translate(sql, normalizeParams(args));
+      const res = await currentClient().query(text, values);
+      return res.rows[0];
+    },
+    async all(...args) {
+      const { text, values } = translate(sql, normalizeParams(args));
+      const res = await currentClient().query(text, values);
+      return res.rows;
+    },
+    async run(...args) {
+      const { text, values } = translate(withReturningId(sql), normalizeParams(args));
+      const res = await currentClient().query(text, values);
+      return { lastInsertRowid: res.rows[0]?.id, changes: res.rowCount };
+    },
+  };
+}
+
+let savepointCounter = 0;
+function transaction(fn) {
+  return async (...args) => {
+    const existingClient = txContext.getStore();
+
+    if (existingClient) {
+      savepointCounter += 1;
+      const name = `sp_${savepointCounter}`;
+      await existingClient.query(`SAVEPOINT ${name}`);
+      try {
+        const result = await fn(...args);
+        await existingClient.query(`RELEASE SAVEPOINT ${name}`);
+        return result;
+      } catch (err) {
+        await existingClient.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        throw err;
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await txContext.run(client, () => fn(...args));
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  };
+}
+
+// Multi-statement DDL/cleanup strings (schema creation below, and the
+// test suite's multi-table DELETE resets) go through the simple query
+// protocol -- pg only allows multiple ';'-separated statements in one call
+// when no parameters are bound, which is exactly this file's usage.
+async function exec(sql) {
+  await currentClient().query(sql);
+}
+
+async function close() {
+  await pool.end();
+}
+
+// now() AT TIME ZONE 'UTC' formatted to match better-sqlite3's
+// datetime('now') string shape exactly ('YYYY-MM-DD HH:MM:SS' in UTC), so
+// every date column stays a plain TEXT column and every existing
+// Date.parse()/string-comparison/ORDER BY in the app keeps working
+// unchanged -- upgrading these to native TIMESTAMPTZ columns is a valid
+// future improvement but isn't required for this migration.
+//
+// NOW_SQL is exported so every route/util file that inlined SQLite's
+// datetime('now') directly in an UPDATE (e.g. `updated_at = datetime('now')`)
+// can swap in the identical Postgres-safe fragment via template-literal
+// interpolation (`updated_at = ${NOW_SQL}`) instead of a bind parameter --
+// this is raw SQL text, never pass it through prepare()'s params.
+const NOW = `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')`;
+
+// Postgres error codes (SQLSTATE) replacing the SQLITE_CONSTRAINT_* strings
+// the codebase used to check on caught errors from a failed INSERT/UPDATE.
+const PG_ERRORS = { UNIQUE_VIOLATION: '23505', FOREIGN_KEY_VIOLATION: '23503' };
+
+const ready = (async () => {
+  await exec(`
+    CREATE TABLE IF NOT EXISTS depots (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      region TEXT,
+      address TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS packages (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('System Administrator', 'National Fleet Manager', 'Depot Manager', 'Tyre Supervisor', 'Read-Only Auditor')),
+      depot_id INTEGER REFERENCES depots(id),
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_login TEXT,
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS bus_models (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      manufacturer TEXT,
+      num_positions INTEGER NOT NULL CHECK (num_positions > 0),
+      position_labels_json TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS buses (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      depot_id INTEGER NOT NULL REFERENCES depots(id),
+      package_id INTEGER REFERENCES packages(id),
+      registration_no TEXT NOT NULL UNIQUE,
+      chassis_no TEXT NOT NULL UNIQUE,
+      bus_model_id INTEGER NOT NULL REFERENCES bus_models(id),
+      year_of_manufacture INTEGER,
+      date_of_entry_into_fleet TEXT,
+      status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Under Maintenance', 'Decommissioned')),
+      odometer_km INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS tyres (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       tyre_number TEXT NOT NULL UNIQUE,
       brand TEXT NOT NULL,
       model TEXT,
@@ -489,71 +292,12 @@ if (tyresTable && !tyresTable.sql.includes("'Under Retread'")) {
       current_position TEXT,
       current_depot_id INTEGER REFERENCES depots(id),
       current_package_id INTEGER REFERENCES packages(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
     );
-    INSERT INTO tyres (
-      id, tyre_number, brand, model, size, purchase_date, initial_nsd, purchase_cost,
-      status, current_bus_id, current_position, current_depot_id, current_package_id, created_at, updated_at
-    )
-    SELECT
-      id, tyre_number, brand, model, size, purchase_date, initial_nsd, purchase_cost,
-      CASE status
-        WHEN 'In Store' THEN 'In Store'
-        WHEN 'Active' THEN 'Active'
-        WHEN 'Under Repair' THEN 'Under Repair'
-        WHEN 'Under Retread' THEN 'Under Retread'
-        WHEN 'Warranty' THEN 'Warranty'
-        WHEN 'Scrapped' THEN 'Scrapped'
-        WHEN 'In Service' THEN 'Active'
-        WHEN 'Condemned' THEN 'Scrapped'
-        WHEN 'Purchased' THEN 'In Store'
-        WHEN 'Received' THEN 'In Store'
-        WHEN 'Inventory' THEN 'In Store'
-        WHEN 'Reserved' THEN 'In Store'
-        WHEN 'Awaiting Fitment' THEN 'In Store'
-        WHEN 'Mounted' THEN 'Active'
-        WHEN 'Running' THEN 'Active'
-        WHEN 'Under Inspection' THEN 'Active'
-        WHEN 'Rotated' THEN 'Active'
-        WHEN 'Removed' THEN 'In Store'
-        WHEN 'Repair Completed' THEN 'In Store'
-        WHEN 'Waiting Installation' THEN 'In Store'
-        WHEN 'Sent for Retread' THEN 'Under Retread'
-        WHEN 'At Retread Vendor' THEN 'Under Retread'
-        WHEN 'Retread Completed' THEN 'In Store'
-        WHEN 'Returned to Inventory' THEN 'In Store'
-        WHEN 'Warranty Pending' THEN 'Warranty'
-        WHEN 'Warranty Approved' THEN 'Warranty'
-        WHEN 'Warranty Rejected' THEN 'Warranty'
-        WHEN 'Disposed' THEN 'Scrapped'
-        WHEN 'Archived' THEN 'Scrapped'
-        ELSE 'In Store'
-      END,
-      current_bus_id, current_position, current_depot_id, current_package_id, created_at, updated_at
-    FROM tyres_old;
-    DROP TABLE tyres_old;
-    CREATE INDEX IF NOT EXISTS idx_tyres_bus ON tyres(current_bus_id);
-    CREATE INDEX IF NOT EXISTS idx_tyres_depot ON tyres(current_depot_id);
-    CREATE INDEX IF NOT EXISTS idx_tyres_package ON tyres(current_package_id);
-    CREATE INDEX IF NOT EXISTS idx_tyres_status ON tyres(status);
-  `);
-  db.pragma('legacy_alter_table = OFF');
-  const tyreFkIssues = db.pragma('foreign_key_check');
-  if (tyreFkIssues.length) {
-    throw new Error(`tyres table rebuild left dangling foreign keys: ${JSON.stringify(tyreFkIssues)}`);
-  }
-  db.pragma('foreign_keys = ON');
-}
 
-const tyreEventsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tyre_events'").get();
-if (tyreEventsTable && !tyreEventsTable.sql.includes('send_to_repair')) {
-  db.pragma('foreign_keys = OFF');
-  db.pragma('legacy_alter_table = ON');
-  db.exec(`
-    ALTER TABLE tyre_events RENAME TO tyre_events_old;
-    CREATE TABLE tyre_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS tyre_events (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       tyre_id INTEGER NOT NULL REFERENCES tyres(id),
       event_type TEXT NOT NULL CHECK (event_type IN (
         'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
@@ -561,7 +305,7 @@ if (tyreEventsTable && !tyreEventsTable.sql.includes('send_to_repair')) {
         'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
         'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim', 'scrap', 'scrap_disposal'
       )),
-      event_date TEXT NOT NULL DEFAULT (datetime('now')),
+      event_date TEXT NOT NULL DEFAULT ${NOW},
       bus_id INTEGER REFERENCES buses(id),
       position TEXT,
       depot_id INTEGER REFERENCES depots(id),
@@ -573,6 +317,10 @@ if (tyreEventsTable && !tyreEventsTable.sql.includes('send_to_repair')) {
       to_depot_id INTEGER REFERENCES depots(id),
       related_tyre_id INTEGER REFERENCES tyres(id),
       nsd_value REAL,
+      nsd_g1 REAL,
+      nsd_g2 REAL,
+      nsd_g3 REAL,
+      nsd_g4 REAL,
       pressure_value REAL,
       repair_type TEXT CHECK (repair_type IN ('plug', 'patch', 'tube')),
       reason TEXT,
@@ -592,45 +340,25 @@ if (tyreEventsTable && !tyreEventsTable.sql.includes('send_to_repair')) {
       supervisor_name TEXT,
       tyre_man_name TEXT,
       patch_size TEXT,
+      retread_purpose TEXT CHECK (retread_purpose IS NULL OR retread_purpose IN ('Retread', 'Cut Repair')),
+      outcome TEXT CHECK (${buildOutcomeCheckSql()}),
+      store_manager TEXT,
       system_backfilled INTEGER NOT NULL DEFAULT 0,
       performed_by INTEGER REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT ${NOW}
     );
-    INSERT INTO tyre_events (
-      id, tyre_id, event_type, event_date, bus_id, position, depot_id,
-      from_bus_id, from_position, from_depot_id, to_bus_id, to_position, to_depot_id,
-      related_tyre_id, nsd_value, pressure_value, repair_type, reason, stored_at,
-      odometer_km, notes, flag_status, repair_cost, retread_cost, scrap_value,
-      vendor_name, gate_pass_no, invoice_no, invoice_date, vendor_location, approved_by,
-      supervisor_name, tyre_man_name, patch_size, system_backfilled, performed_by, created_at
-    )
-    SELECT
-      id, tyre_id, event_type, event_date, bus_id, position, depot_id,
-      from_bus_id, from_position, from_depot_id, to_bus_id, to_position, to_depot_id,
-      related_tyre_id, nsd_value, pressure_value, repair_type, reason, stored_at,
-      odometer_km, notes, flag_status, repair_cost, retread_cost, scrap_value,
-      vendor_name, gate_pass_no, invoice_no, invoice_date, vendor_location, approved_by,
-      supervisor_name, tyre_man_name, patch_size, system_backfilled, performed_by, created_at
-    FROM tyre_events_old;
-    DROP TABLE tyre_events_old;
-    CREATE INDEX IF NOT EXISTS idx_tyre_events_tyre ON tyre_events(tyre_id, event_date);
-    CREATE INDEX IF NOT EXISTS idx_tyre_events_type ON tyre_events(event_type);
-    CREATE INDEX IF NOT EXISTS idx_tyre_events_bus ON tyre_events(bus_id);
-  `);
-  db.pragma('legacy_alter_table = OFF');
-  const eventFkIssues = db.pragma('foreign_key_check');
-  if (eventFkIssues.length) {
-    throw new Error(`tyre_events table rebuild left dangling foreign keys: ${JSON.stringify(eventFkIssues)}`);
-  }
-  db.pragma('foreign_keys = ON');
-}
 
-const thresholdsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'thresholds'").get();
-if (thresholdsTable && !thresholdsTable.sql.includes("'TOE'")) {
-  db.exec(`
-    ALTER TABLE thresholds RENAME TO thresholds_old;
-    CREATE TABLE thresholds (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS tyre_event_amendments (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      original_event_id INTEGER NOT NULL REFERENCES tyre_events(id),
+      corrected_values_json TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      amended_by INTEGER REFERENCES users(id),
+      amended_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS thresholds (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parameter_type TEXT NOT NULL CHECK (parameter_type IN (
         'NSD', 'PRESSURE', 'INSPECTION_INTERVAL', 'ESCALATION_DAYS', 'ROTATION_INTERVAL',
         'ROTATION_INTERVAL_KM', 'TOE', 'CASTER', 'CAMBER', 'SAI'
@@ -644,24 +372,40 @@ if (thresholdsTable && !thresholdsTable.sql.includes("'TOE'")) {
       unit TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
       updated_by INTEGER REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
     );
-    INSERT INTO thresholds SELECT * FROM thresholds_old;
-    DROP TABLE thresholds_old;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_thresholds_scope ON thresholds(parameter_type, scope_type, scope_id) WHERE is_active = 1;
-  `);
-}
 
-// alerts has no incoming foreign keys from other tables, so this rebuild
-// (adding 'ROTATION' to parameter_type) is a plain rename/recreate/copy/drop
-// like audit_log's, with no legacy_alter_table concern.
-const alertsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alerts'").get();
-if (alertsTable && !alertsTable.sql.includes("'ROTATION'")) {
-  db.exec(`
-    ALTER TABLE alerts RENAME TO alerts_old;
-    CREATE TABLE alerts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS wheel_alignments (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      bus_id INTEGER NOT NULL REFERENCES buses(id),
+      depot_id INTEGER REFERENCES depots(id),
+      package_id INTEGER REFERENCES packages(id),
+      alignment_date TEXT NOT NULL DEFAULT ${NOW},
+      current_km INTEGER,
+      due_date TEXT,
+      status TEXT NOT NULL DEFAULT 'Done' CHECK (status IN ('Done', 'Pending')),
+      remarks TEXT,
+      performed_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS wheel_alignment_measurements (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      alignment_id INTEGER NOT NULL REFERENCES wheel_alignments(id),
+      position TEXT NOT NULL,
+      toe_before REAL,
+      toe_after REAL,
+      caster_before REAL,
+      caster_after REAL,
+      camber_before REAL,
+      camber_after REAL,
+      sai_before REAL,
+      sai_after REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS alerts (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       tyre_id INTEGER NOT NULL REFERENCES tyres(id),
       bus_id INTEGER REFERENCES buses(id),
       depot_id INTEGER REFERENCES depots(id),
@@ -671,7 +415,7 @@ if (alertsTable && !alertsTable.sql.includes("'ROTATION'")) {
       triggering_event_id INTEGER REFERENCES tyre_events(id),
       reading_value REAL,
       threshold_value REAL,
-      opened_at TEXT NOT NULL DEFAULT (datetime('now')),
+      opened_at TEXT NOT NULL DEFAULT ${NOW},
       acknowledged_at TEXT,
       acknowledged_by INTEGER REFERENCES users(id),
       resolved_at TEXT,
@@ -679,16 +423,486 @@ if (alertsTable && !alertsTable.sql.includes("'ROTATION'")) {
       resolution_note TEXT,
       escalation_level INTEGER NOT NULL DEFAULT 0,
       escalated_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT ${NOW},
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
     );
-    INSERT INTO alerts SELECT * FROM alerts_old;
-    DROP TABLE alerts_old;
+
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      username TEXT,
+      action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'TRANSFER', 'AMEND_EVENT')),
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      before_json TEXT,
+      after_json TEXT,
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_buses_depot ON buses(depot_id);
+    CREATE INDEX IF NOT EXISTS idx_buses_model ON buses(bus_model_id);
+    CREATE INDEX IF NOT EXISTS idx_buses_package ON buses(package_id);
+    CREATE INDEX IF NOT EXISTS idx_tyres_bus ON tyres(current_bus_id);
+    CREATE INDEX IF NOT EXISTS idx_tyres_depot ON tyres(current_depot_id);
+    CREATE INDEX IF NOT EXISTS idx_tyres_status ON tyres(status);
+    CREATE INDEX IF NOT EXISTS idx_tyres_package ON tyres(current_package_id);
+    CREATE INDEX IF NOT EXISTS idx_wheel_alignments_bus ON wheel_alignments(bus_id, alignment_date);
+    CREATE INDEX IF NOT EXISTS idx_wheel_alignment_measurements_alignment ON wheel_alignment_measurements(alignment_id);
+    CREATE INDEX IF NOT EXISTS idx_tyre_events_tyre ON tyre_events(tyre_id, event_date);
+    CREATE INDEX IF NOT EXISTS idx_tyre_events_type ON tyre_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_tyre_events_bus ON tyre_events(bus_id);
     CREATE INDEX IF NOT EXISTS idx_alerts_tyre ON alerts(tyre_id);
     CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_active_unique ON alerts(tyre_id, parameter_type) WHERE status IN ('Open', 'Acknowledged');
+    CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_tyre_event_amendments_event ON tyre_event_amendments(original_event_id, amended_at);
+    CREATE INDEX IF NOT EXISTS idx_users_depot ON users(depot_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_thresholds_scope ON thresholds(parameter_type, scope_type, scope_id) WHERE is_active = 1;
   `);
-}
 
-// Export the initialized connection database object for usage in the application
-module.exports = db;
+  // MIS Excel Import — schema per the frozen v4 architecture. Every
+  // mis_<sheet_type>_records table is an immutable ingestion record: written
+  // once by the Replay Engine, never updated by lifecycle amendments. Shared
+  // shape across all of them:
+  //   import_session_id     -- which upload produced this row
+  //   source_sheet/source_row -- traceability back to the exact workbook cell
+  //   raw_row_json           -- the entire original row, exactly as read,
+  //                             before any parsing/interpretation (subsumes
+  //                             the earlier extra_fields idea outright)
+  //   fingerprint            -- hashed over resolved IDs, UNIQUE per table;
+  //                             backs the new/exact-duplicate/conflicting
+  //                             3-way classification
+  //   schema_version         -- which set of named columns this table
+  //                             recognized when the row was written
+  //   event_generator_version -- which Event Generator rule version derived
+  //                             (or attempted to derive) this row's event
+  //   linkage_status         -- pending -> linked | partially_linked |
+  //                             unlinked | awaiting_review | manually_linked
+  //
+  // A single MIS record can legitimately generate more than one lifecycle
+  // event (the Consumption sheet's one row is both an incoming tyre and its
+  // fitment; the Puncture sheet's one row is both send_to_repair and
+  // puncture_repair, each needing its own event_date). A singular
+  // linked-record pointer on the MIS row itself can't represent that, so
+  // generated events are recorded in the mis_generated_events join table
+  // below instead -- one row per event actually created, however many that
+  // turns out to be for a given MIS record. linkage_status is the
+  // record-level rollup: linked (every intended event landed), unlinked
+  // (none did), partially_linked (some did, some didn't -- a row that still
+  // needs a look, not a clean success).
+  await exec(`
+    CREATE TABLE IF NOT EXISTS import_sessions (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      uploaded_by INTEGER REFERENCES users(id),
+      original_filename TEXT NOT NULL,
+      stored_path TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'previewed' CHECK (status IN (
+        'previewed', 'queued', 'running', 'committed', 'failed', 'cancelled'
+      )),
+      rows_total INTEGER NOT NULL DEFAULT 0,
+      rows_stored INTEGER NOT NULL DEFAULT 0,
+      events_linked INTEGER NOT NULL DEFAULT 0,
+      events_unlinked INTEGER NOT NULL DEFAULT 0,
+      rows_skipped_duplicate INTEGER NOT NULL DEFAULT 0,
+      error_summary TEXT,
+      started_at TEXT NOT NULL DEFAULT ${NOW},
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE TABLE IF NOT EXISTS import_session_rows (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      sheet_type TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN (
+        'stored', 'skipped_exact_duplicate', 'flagged_conflicting_duplicate',
+        'rejected_shape', 'rejected_lifecycle'
+      )),
+      mis_record_type TEXT,
+      mis_record_id INTEGER,
+      tyre_event_id INTEGER REFERENCES tyre_events(id),
+      failure_reason TEXT,
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Tyre Cons. New-Retread-Old Ok sheet: a tyre entering inventory
+    -- (new/retread/old-ok-spare) and, on the same row, its fitment onto a
+    -- bus in place of a removed tyre. Two lifecycle intents per row:
+    -- purchase_intake (incoming tyre) + fitment_created/replacement.
+    CREATE TABLE IF NOT EXISTS mis_consumption_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      depot_id INTEGER REFERENCES depots(id),
+      invoice_no TEXT,
+      invoice_date TEXT,
+      received_date TEXT,
+      make TEXT,
+      tyre_kind TEXT,
+      nsd REAL,
+      consumption_status TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      bus_id INTEGER REFERENCES buses(id),
+      bus_number_raw TEXT,
+      position TEXT,
+      fitment_date TEXT,
+      fitment_km INTEGER,
+      removed_tyre_id INTEGER REFERENCES tyres(id),
+      removed_tyre_number_raw TEXT,
+      removed_tyre_min_nsd REAL,
+      removal_reason TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Puncture Repaire Details sheet: send_to_repair + puncture_repair.
+    CREATE TABLE IF NOT EXISTS mis_puncture_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      depot_id INTEGER REFERENCES depots(id),
+      declared_date TEXT,
+      make TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      nsd REAL,
+      repaired_date TEXT,
+      patch_size TEXT,
+      supervisor_name TEXT,
+      tyre_man_name TEXT,
+      remarks TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Retread Tyre History sheet: retread_sent (dispatch to retreader) +
+    -- retread_completed (received back, Done/Reject outcome).
+    CREATE TABLE IF NOT EXISTS mis_retread_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      package_id INTEGER REFERENCES packages(id),
+      depot_id INTEGER REFERENCES depots(id),
+      removal_date TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      make TEXT,
+      nsd_at_removal REAL,
+      tyre_life_before_retread_km INTEGER,
+      retread_purpose TEXT,
+      dispatch_date TEXT,
+      gate_pass_no TEXT,
+      vendor_name TEXT,
+      vendor_location TEXT,
+      invoice_no TEXT,
+      invoice_date TEXT,
+      retread_status TEXT,
+      rejected_reason TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Scraped Tyre Details sheet: scrap + scrap_disposal (vendor sale).
+    CREATE TABLE IF NOT EXISTS mis_scrap_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      package_id INTEGER REFERENCES packages(id),
+      depot_id INTEGER REFERENCES depots(id),
+      scrap_declared_date TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      make TEXT,
+      tyre_kind TEXT,
+      last_removal_date TEXT,
+      min_nsd REAL,
+      tyre_life_before_retread_km INTEGER,
+      tyre_life_after_retread_km INTEGER,
+      total_tyre_life_km INTEGER,
+      scrap_cause TEXT,
+      remarks TEXT,
+      gate_pass_no TEXT,
+      gate_pass_date TEXT,
+      vendor_name TEXT,
+      approved_by TEXT,
+      store_manager TEXT,
+      vendor_address TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Warranty Tyre History sheet: warranty_claim.
+    CREATE TABLE IF NOT EXISTS mis_warranty_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      package_id INTEGER REFERENCES packages(id),
+      depot_id INTEGER REFERENCES depots(id),
+      warranty_declared_date TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      make TEXT,
+      tyre_kind TEXT,
+      last_removal_date TEXT,
+      min_nsd REAL,
+      tyre_life_before_retread_km INTEGER,
+      tyre_life_after_retread_km INTEGER,
+      total_tyre_life_km INTEGER,
+      warranty_cause TEXT,
+      remarks TEXT,
+      warranty_claim_status TEXT,
+      claim_status_date TEXT,
+      gate_pass_no TEXT,
+      gate_pass_date TEXT,
+      vendor_name TEXT,
+      approved_by TEXT,
+      store_manager TEXT,
+      vendor_address TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Tyre NSD Report sheet: nsd_reading (+ pressure_reading from the same
+    -- row). Deliberately excludes every formula-derived report column
+    -- (% wear, projected/remaining mileage, km/mm wear, days remaining,
+    -- retreading date, standard OTD lookup) per the "ignore computed
+    -- report cells" rule -- these are recomputable from stored facts, never
+    -- themselves facts to preserve.
+    CREATE TABLE IF NOT EXISTS mis_nsd_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      depot_id INTEGER REFERENCES depots(id),
+      tyre_kind TEXT,
+      bus_id INTEGER REFERENCES buses(id),
+      bus_number_raw TEXT,
+      tyre_dimension TEXT,
+      pr_li_si TEXT,
+      make TEXT,
+      pattern TEXT,
+      position TEXT,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      inspection_date TEXT,
+      pressure_psi REAL,
+      nsd_g1 REAL,
+      nsd_g2 REAL,
+      nsd_g3 REAL,
+      nsd_g4 REAL,
+      vehicle_status TEXT,
+      tyre_fitting_condition TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Tyre Rotation sheet: one Excel row covers up to 6 tyre-position slots
+    -- (FR/FL/RRO/RRI/RLO/RLI) moved in the same rotation visit. Normalized
+    -- to one MIS record per occupied slot (matching tyre_events' one-tyre-
+    -- per-rotation-event shape); all slots from the same source row share
+    -- import_session_id + source_sheet + source_row as their natural group
+    -- key, plus an identical raw_row_json.
+    CREATE TABLE IF NOT EXISTS mis_rotation_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      package_id INTEGER REFERENCES packages(id),
+      depot_id INTEGER REFERENCES depots(id),
+      bus_id INTEGER REFERENCES buses(id),
+      bus_number_raw TEXT,
+      current_km INTEGER,
+      km_at_rotation INTEGER,
+      due_date TEXT,
+      rotation_date TEXT,
+      from_position TEXT NOT NULL,
+      tyre_id INTEGER REFERENCES tyres(id),
+      tyre_number_raw TEXT,
+      nsd REAL,
+      to_position TEXT,
+      status TEXT,
+      remarks TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    -- Wheel Alignment sheet: feeds the existing wheel_alignments /
+    -- wheel_alignment_measurements tables as its lifecycle-equivalent
+    -- output (linked_record_type = 'wheel_alignment'), same as every other
+    -- sheet feeds tyre_events -- kept as its own dedicated MIS table rather
+    -- than reusing the operational tables as import staging, since only the
+    -- MIS table carries raw_row_json fidelity, import traceability, and
+    -- fingernprint-based dedup on re-import.
+    CREATE TABLE IF NOT EXISTS mis_wheel_alignment_records (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      import_session_id INTEGER NOT NULL REFERENCES import_sessions(id),
+      source_sheet TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      depot_id INTEGER REFERENCES depots(id),
+      bus_id INTEGER REFERENCES buses(id),
+      bus_number_raw TEXT,
+      current_km INTEGER,
+      km_at_alignment INTEGER,
+      due_date TEXT,
+      alignment_date TEXT,
+      toe_fr_before REAL, toe_fr_after REAL,
+      caster_fr_before REAL, caster_fr_after REAL,
+      camber_fr_before REAL, camber_fr_after REAL,
+      sai_fr_before REAL, sai_fr_after REAL,
+      toe_fl_before REAL, toe_fl_after REAL,
+      caster_fl_before REAL, caster_fl_after REAL,
+      camber_fl_before REAL, camber_fl_after REAL,
+      sai_fl_before REAL, sai_fl_after REAL,
+      status TEXT,
+      remarks TEXT,
+      raw_row_json JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      schema_version SMALLINT NOT NULL DEFAULT 1,
+      event_generator_version SMALLINT,
+      linkage_status TEXT NOT NULL DEFAULT 'pending' CHECK (linkage_status IN (
+        'pending', 'linked', 'partially_linked', 'unlinked', 'awaiting_review', 'manually_linked'
+      )),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_import_session_rows_session ON import_session_rows(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_consumption_session ON mis_consumption_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_consumption_tyre ON mis_consumption_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_consumption_linkage ON mis_consumption_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_consumption_fingerprint ON mis_consumption_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_puncture_session ON mis_puncture_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_puncture_tyre ON mis_puncture_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_puncture_linkage ON mis_puncture_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_puncture_fingerprint ON mis_puncture_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_retread_session ON mis_retread_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_retread_tyre ON mis_retread_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_retread_linkage ON mis_retread_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_retread_fingerprint ON mis_retread_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_scrap_session ON mis_scrap_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_scrap_tyre ON mis_scrap_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_scrap_linkage ON mis_scrap_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_scrap_fingerprint ON mis_scrap_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_warranty_session ON mis_warranty_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_warranty_tyre ON mis_warranty_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_warranty_linkage ON mis_warranty_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_warranty_fingerprint ON mis_warranty_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_nsd_session ON mis_nsd_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_nsd_tyre ON mis_nsd_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_nsd_linkage ON mis_nsd_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_nsd_fingerprint ON mis_nsd_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_rotation_session ON mis_rotation_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_rotation_tyre ON mis_rotation_records(tyre_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_rotation_linkage ON mis_rotation_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_rotation_fingerprint ON mis_rotation_records(fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_mis_wheel_alignment_session ON mis_wheel_alignment_records(import_session_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_wheel_alignment_bus ON mis_wheel_alignment_records(bus_id);
+    CREATE INDEX IF NOT EXISTS idx_mis_wheel_alignment_linkage ON mis_wheel_alignment_records(linkage_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mis_wheel_alignment_fingerprint ON mis_wheel_alignment_records(fingerprint);
+
+    -- One row per lifecycle event actually created from an MIS record --
+    -- see the note above the import_sessions table for why this is a join
+    -- table rather than a singular pointer column on each mis_* row.
+    CREATE TABLE IF NOT EXISTS mis_generated_events (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      mis_record_type TEXT NOT NULL,
+      mis_record_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      tyre_event_id INTEGER REFERENCES tyre_events(id),
+      wheel_alignment_id INTEGER REFERENCES wheel_alignments(id),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+    CREATE INDEX IF NOT EXISTS idx_mis_generated_events_record ON mis_generated_events(mis_record_type, mis_record_id);
+  `);
+
+  // Traceability chain per architecture §10: a nullable, polymorphic pointer
+  // from a lifecycle-writing table back to the MIS record that generated it.
+  // No DB-level FK (the two possible source_mis_record_type values point at
+  // different tables) -- resolved in application code, same reasoning as
+  // linked_record_type/linked_record_id above.
+  await exec(`
+    ALTER TABLE tyre_events ADD COLUMN IF NOT EXISTS source_mis_record_type TEXT;
+    ALTER TABLE tyre_events ADD COLUMN IF NOT EXISTS source_mis_record_id INTEGER;
+    ALTER TABLE wheel_alignments ADD COLUMN IF NOT EXISTS source_mis_record_type TEXT;
+    ALTER TABLE wheel_alignments ADD COLUMN IF NOT EXISTS source_mis_record_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_tyre_events_source_mis ON tyre_events(source_mis_record_type, source_mis_record_id);
+    CREATE INDEX IF NOT EXISTS idx_wheel_alignments_source_mis ON wheel_alignments(source_mis_record_type, source_mis_record_id);
+  `);
+
+  // The outcome CHECK constraint's definition lives in EVENT_OUTCOMES, not
+  // in this file (see buildOutcomeCheckSql above) -- but CREATE TABLE IF
+  // NOT EXISTS only applies to a table that doesn't exist yet, so an
+  // already-created tyre_events table needs its constraint re-applied
+  // explicitly whenever EVENT_OUTCOMES changes. Re-running this with an
+  // unchanged EVENT_OUTCOMES is a harmless no-op (drop-then-recreate the
+  // identical constraint), so it's safe to run unconditionally on every
+  // boot rather than trying to detect whether it actually changed.
+  await exec(`
+    ALTER TABLE tyre_events DROP CONSTRAINT IF EXISTS tyre_events_outcome_check;
+    ALTER TABLE tyre_events ADD CONSTRAINT tyre_events_outcome_check CHECK (${buildOutcomeCheckSql()});
+  `);
+
+  // SRS §8.3: pressure unit defaults to PSI until an Admin changes it.
+  // ON CONFLICT DO NOTHING is Postgres's equivalent of SQLite's INSERT OR IGNORE.
+  await prepare('INSERT INTO system_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING').run(['pressure_unit', 'PSI']);
+  // MIS Excel importer kill switch (§10) defaults to enabled.
+  await prepare('INSERT INTO system_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING').run(['mis_import_enabled', 'true']);
+})();
+
+module.exports = { prepare, transaction, exec, close, ready, pool, NOW_SQL: NOW, PG_ERRORS };
