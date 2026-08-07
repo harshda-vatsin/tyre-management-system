@@ -15,14 +15,14 @@ const { ALL_STATUSES, EVENT_TYPES } = require('./tyreLifecycle');
 /**
  * Builds the Tyre Status snapshot report.
  * Resolves current active tyres, physical positions, brands, and latest nsd/pressure readings.
- * 
+ *
  * @param {object} filters - Report query filters
  * @param {number|null} [filters.depot_id] - Scoping depot ID filter
  * @param {number|null} [filters.bus_id] - Bus ID filter
  * @param {string|null} [filters.status] - Tyre status filter ('In Service', 'In Store', etc.)
- * @returns {Array<object>} Flat array of tyre status report rows
+ * @returns {Promise<Array<object>>} Flat array of tyre status report rows
  */
-function tyreStatusReport(filters) {
+async function tyreStatusReport(filters) {
   const { depot_id, package_id, bus_id, status } = filters;
   const clauses = [];
   const params = {};
@@ -38,7 +38,7 @@ function tyreStatusReport(filters) {
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
-  const rows = db
+  const rows = await db
     .prepare(`
       SELECT
         t.tyre_number, t.brand, t.status,
@@ -68,7 +68,7 @@ function tyreStatusReport(filters) {
 
 // ---------- 2. Flagged Tyres Report ----------
 // SRS 7.3: tyres currently breaching NSD or Pressure thresholds.
-function flaggedTyresReport(filters) {
+async function flaggedTyresReport(filters) {
   const { depot_id, bus_id, alert_level, date } = filters;
   const clauses = [`a.status IN ('Open', 'Acknowledged')`, `a.parameter_type IN ('NSD', 'PRESSURE')`];
   const params = {};
@@ -105,11 +105,11 @@ function flaggedTyresReport(filters) {
 // SRS 7.3: full event history for a specific tyre number. Same event shape
 // as GET /api/events (Tyre Card milestone) -- this report is that same query,
 // scoped to one resolved tyre_id.
-function tyreHistoryReport(filters) {
+async function tyreHistoryReport(filters) {
   const { tyre_number, event_type, from, to } = filters;
   if (!tyre_number) return [];
 
-  const tyre = db.prepare('SELECT id FROM tyres WHERE tyre_number = ?').get(tyre_number);
+  const tyre = await db.prepare('SELECT id FROM tyres WHERE tyre_number = ?').get(tyre_number);
   if (!tyre) return [];
 
   const clauses = ['e.tyre_id = @tyre_id'];
@@ -139,7 +139,7 @@ function tyreHistoryReport(filters) {
 // ---------- 4. Bus Tyre Health Report ----------
 // SRS 7.3: all tyre positions of a selected bus with current readings, "as
 // of" an optional date (bounds the correlated subqueries, not a range).
-function busTyreHealthReport(filters) {
+async function busTyreHealthReport(filters) {
   const { bus_id, depot_id, date } = filters;
   if (!bus_id && !depot_id) return [];
 
@@ -168,12 +168,12 @@ function busTyreHealthReport(filters) {
     params.depot_id = depot_id;
   }
 
-  const tyres = db.prepare(query).all(params);
+  const tyres = await db.prepare(query).all(params);
 
   if (bus_id) {
-    const bus = db.prepare('SELECT id, registration_no, bus_model_id FROM buses WHERE id = ?').get(bus_id);
+    const bus = await db.prepare('SELECT id, registration_no, bus_model_id FROM buses WHERE id = ?').get(bus_id);
     if (!bus) return [];
-    const model = db.prepare('SELECT position_labels_json FROM bus_models WHERE id = ?').get(bus.bus_model_id);
+    const model = await db.prepare('SELECT position_labels_json FROM bus_models WHERE id = ?').get(bus.bus_model_id);
     const positions = JSON.parse(model.position_labels_json);
     const tyreByPosition = Object.fromEntries(tyres.map((t) => [t.current_position, t]));
     return positions.map((position) => {
@@ -204,7 +204,7 @@ function busTyreHealthReport(filters) {
 }
 
 // ---------- 5. Rotation & Replacement Log ----------
-function rotationReplacementReport(filters) {
+async function rotationReplacementReport(filters) {
   const { depot_id, bus_id, from, to } = filters;
   const clauses = [`e.event_type IN ('rotation', 'replacement')`];
   const params = {};
@@ -233,7 +233,7 @@ function rotationReplacementReport(filters) {
 }
 
 // ---------- 6. Puncture Incident Report ----------
-function punctureIncidentReport(filters) {
+async function punctureIncidentReport(filters) {
   const { depot_id, bus_id, from, to } = filters;
   const clauses = [`e.event_type = 'puncture_repair'`];
   const params = {};
@@ -260,7 +260,7 @@ function punctureIncidentReport(filters) {
 }
 
 // ---------- 7. Inter-Bus Transfer Log ----------
-function interBusTransferReport(filters) {
+async function interBusTransferReport(filters) {
   const { from_depot_id, to_depot_id, from, to, scopeDepotId } = filters;
   const clauses = [`e.event_type = 'inter_bus_transfer'`];
   const params = {};
@@ -306,7 +306,7 @@ function interBusTransferReport(filters) {
 // tyre-specific mileage (no odometer is captured against individual tyre
 // events) -- so total distance is not computable from the data model and is
 // intentionally omitted rather than fabricated. Days in service is shown.
-function tyreLifeReport(filters) {
+async function tyreLifeReport(filters) {
   const { depot_id, brand, from, to } = filters;
   const clauses = [];
   const params = {};
@@ -324,26 +324,46 @@ function tyreLifeReport(filters) {
   // (rotation/send_to_repair/send_to_store/condemnation/scrap/retread_sent)
   // if one was logged with a reading, else the current bus's live odometer
   // if the tyre is still mounted from that same fitment.
-  // Filters "after this fitment" by event id rather than event_date: SQLite's
-  // datetime('now') only has 1-second resolution, so a fitment immediately
-  // followed by its removal event in the same session can land in the same
-  // second -- id ordering (which always reflects true insertion order) stays
-  // correct even then.
-  const lastFitmentIdSql = `(SELECT e2.id FROM tyre_events e2 WHERE e2.tyre_id = t.id AND e2.event_type = 'fitment_created' ORDER BY e2.event_date DESC, e2.id DESC LIMIT 1)`;
+  // Filters "after this fitment" by event id rather than event_date: sub-
+  // second timestamp resolution means a fitment immediately followed by its
+  // removal event in the same session can land in the same second -- id
+  // ordering (which always reflects true insertion order) stays correct even then.
+  //
+  // 'replacement' is included alongside 'fitment_created' throughout this
+  // report (as a start-of-stint baseline, and as a removal boundary) because
+  // it's the same real-world moment under a different event_type: a tyre
+  // going onto a bus for the first time uses fitment_created (nothing to
+  // remove), a tyre going on in place of another uses replacement instead
+  // (createReplacement in tyreEvents.js), which writes one event row to
+  // *each* tyre involved -- to_position set on the incoming tyre's row,
+  // from_position set on the outgoing tyre's, so those columns (not
+  // event_type, which is the same 'replacement' for both) are what
+  // distinguishes "my stint started here" from "my stint ended here." Not a
+  // new event type or workflow, just this report (and createReplacement's
+  // now-optional odometer_km param) recognizing a distinction the data
+  // already draws.
+  const lastFitmentIdSql = `(SELECT e2.id FROM tyre_events e2 WHERE e2.tyre_id = t.id AND (e2.event_type = 'fitment_created' OR (e2.event_type = 'replacement' AND e2.to_position IS NOT NULL)) ORDER BY e2.event_date DESC, e2.id DESC LIMIT 1)`;
   const removalOdometerSql = `
     (SELECT e.odometer_km FROM tyre_events e
      WHERE e.tyre_id = t.id AND e.odometer_km IS NOT NULL
-       AND e.event_type IN ('rotation', 'send_to_repair', 'send_to_store', 'condemnation', 'scrap', 'retread_sent')
+       AND (e.event_type IN ('rotation', 'send_to_repair', 'send_to_store', 'condemnation', 'scrap', 'retread_sent')
+            OR (e.event_type = 'replacement' AND e.from_position IS NOT NULL))
        AND e.id > (${lastFitmentIdSql})
      ORDER BY e.event_date ASC, e.id ASC LIMIT 1)
   `;
+  const lastFitmentOdometerSql = `
+    (SELECT e.odometer_km FROM tyre_events e
+     WHERE e.tyre_id = t.id
+       AND (e.event_type = 'fitment_created' OR (e.event_type = 'replacement' AND e.to_position IS NOT NULL))
+     ORDER BY e.event_date DESC, e.id DESC LIMIT 1)
+  `;
 
-  const rows = db
+  const rows = await db
     .prepare(`
       SELECT
         t.tyre_number, t.brand, t.purchase_date, t.status, d.name AS depot_name,
         ${lastEventValueSql('condemnation', 'event_date')} AS condemned_date,
-        ${lastEventValueSql('fitment_created', 'odometer_km')} AS last_fitment_odometer_km,
+        ${lastFitmentOdometerSql} AS last_fitment_odometer_km,
         ${removalOdometerSql} AS removal_odometer_km,
         cb.odometer_km AS current_bus_odometer_km
       FROM tyres t
@@ -373,17 +393,17 @@ function tyreLifeReport(filters) {
 // SRS 7.3: buses/tyres overdue for inspection. Directly reuses the same
 // compliance computation as the Business Rules Engine and Dashboard
 // milestones -- one definition of "overdue" in the whole system.
-function inspectionComplianceReport(filters) {
+async function inspectionComplianceReport(filters) {
   const { depot_id, days_overdue } = filters;
-  const threshold = resolveThreshold('INSPECTION_INTERVAL', {});
+  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
   const effectiveThreshold = days_overdue
     ? { ...threshold, critical_max: Number(days_overdue) }
     : threshold;
 
-  const tyres = listInServiceTyresWithLastReading(depot_id);
-  const buses = db.prepare('SELECT id, registration_no FROM buses').all();
+  const tyres = await listInServiceTyresWithLastReading(depot_id);
+  const buses = await db.prepare('SELECT id, registration_no FROM buses').all();
   const busById = Object.fromEntries(buses.map((b) => [b.id, b.registration_no]));
-  const depots = db.prepare('SELECT id, name FROM depots').all();
+  const depots = await db.prepare('SELECT id, name FROM depots').all();
   const depotById = Object.fromEntries(depots.map((d) => [d.id, d.name]));
 
   return tyres
@@ -401,13 +421,13 @@ function inspectionComplianceReport(filters) {
 }
 
 // ---------- 10. Condemned Tyres Report ----------
-function condemnedTyresReport(filters) {
+async function condemnedTyresReport(filters) {
   const { depot_id, from, to } = filters;
   const clauses = [`t.status = 'Scrapped'`];
   const params = {};
   depotScopeClause('t.current_depot_id', depot_id, clauses, params);
 
-  const rows = db
+  const rows = await db
     .prepare(`
       SELECT
         t.tyre_number, t.brand, d.name AS depot_name,
@@ -432,7 +452,7 @@ function condemnedTyresReport(filters) {
 }
 
 // ---------- 11. Retread History Report ----------
-function retreadHistoryReport(filters) {
+async function retreadHistoryReport(filters) {
   const { depot_id, from, to } = filters;
   const clauses = [`e.event_type IN ('retread_sent', 'retread_completed')`];
   const params = {};
@@ -456,7 +476,7 @@ function retreadHistoryReport(filters) {
 }
 
 // ---------- 12. Warranty Claims Report ----------
-function warrantyClaimsReport(filters) {
+async function warrantyClaimsReport(filters) {
   const { depot_id, from, to } = filters;
   const clauses = [`e.event_type = 'warranty_claim'`];
   const params = {};
@@ -480,7 +500,7 @@ function warrantyClaimsReport(filters) {
 }
 
 // ---------- 13. Scrap Analysis Report ----------
-function scrapAnalysisReport(filters) {
+async function scrapAnalysisReport(filters) {
   const { depot_id, from, to } = filters;
   const clauses = [`e.event_type = 'scrap'`];
   const params = {};
@@ -504,7 +524,7 @@ function scrapAnalysisReport(filters) {
 }
 
 // ---------- 14. Wheel Alignment Report ----------
-function wheelAlignmentReport(filters) {
+async function wheelAlignmentReport(filters) {
   const { depot_id, bus_id, from, to } = filters;
   const clauses = [];
   const params = {};
@@ -537,7 +557,7 @@ function wheelAlignmentReport(filters) {
 // status, grouped by depot/package. The full 31-day historical grid is
 // deliberately not reconstructed here; the tyre-history report / audit log
 // already provide full history if it's ever needed.
-function stockSummaryReport(filters) {
+async function stockSummaryReport(filters) {
   const { depot_id, package_id } = filters;
   const clauses = [];
   const params = {};
@@ -552,7 +572,7 @@ function stockSummaryReport(filters) {
       LEFT JOIN depots d ON d.id = t.current_depot_id
       LEFT JOIN packages p ON p.id = t.current_package_id
       ${where}
-      GROUP BY t.current_depot_id, t.current_package_id, t.status
+      GROUP BY t.current_depot_id, t.current_package_id, t.status, d.name, p.name
       ORDER BY d.name, p.name, t.status
     `)
     .all(params);

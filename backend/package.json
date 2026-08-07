@@ -8,11 +8,12 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
-    "backfill": "node src/migrations/backfillLifecycleEvents.js"
+    "seed:thresholds": "node src/seedThresholds.js",
+    "backfill": "node src/migrations/backfillLifecycleEvents.js",
+    "test": "node --test"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
-    "better-sqlite3": "^12.11.1",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.1",
     "dotenv": "^16.4.5",
@@ -22,6 +23,8 @@
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
     "pdfkit": "^0.19.1",
+    "pg": "^8.22.0",
+    "pg-boss": "^12.27.0",
     "qrcode": "^1.5.4"
   }
 }

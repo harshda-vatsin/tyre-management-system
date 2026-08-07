@@ -6,6 +6,7 @@
 
 const express = require('express');
 const db = require('../db');
+const { NOW_SQL, PG_ERRORS } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
@@ -14,6 +15,7 @@ const { createTyreEvent } = require('../utils/tyreEvents');
 const { assertValidTransition } = require('../utils/lifecycleStateMachine');
 const { TERMINAL_STATUSES } = require('../utils/tyreLifecycle');
 const { ApiError } = require('../utils/apiError');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -35,7 +37,7 @@ const SELECT_TYRE = `
 
 router.use(authenticate);
 
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { search = '', depot_id, status, brand, bus_id, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
   const params = {};
@@ -66,21 +68,21 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const total = db.prepare(`SELECT COUNT(*) c FROM tyres t LEFT JOIN buses b ON b.id = t.current_bus_id ${where}`).get(params).c;
+  const total = (await db.prepare(`SELECT COUNT(*) c FROM tyres t LEFT JOIN buses b ON b.id = t.current_bus_id ${where}`).get(params)).c;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const size = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
   const offset = (pageNum - 1) * size;
 
-  const rows = db
+  const rows = await db
     .prepare(`${SELECT_TYRE} ${where} ORDER BY t.tyre_number LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit: size, offset });
 
   res.json({ data: rows, total, page: pageNum, pageSize: size });
-});
+}));
 
-router.get('/lookup/:tyreNumber', (req, res) => {
-  const row = db.prepare(`${SELECT_TYRE} WHERE t.tyre_number = ?`).get(req.params.tyreNumber);
+router.get('/lookup/:tyreNumber', asyncHandler(async (req, res) => {
+  const row = await db.prepare(`${SELECT_TYRE} WHERE t.tyre_number = ?`).get(req.params.tyreNumber);
   if (!row) return res.status(404).json({ error: 'Tyre not found' });
 
   if (isDepotScoped(req.user) && row.current_depot_id !== req.user.depot_id) {
@@ -88,10 +90,10 @@ router.get('/lookup/:tyreNumber', (req, res) => {
   }
 
   res.json({ id: row.id, tyre_number: row.tyre_number, current_depot_id: row.current_depot_id });
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const row = await db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Tyre not found' });
 
   if (isDepotScoped(req.user) && row.current_depot_id !== req.user.depot_id) {
@@ -99,22 +101,22 @@ router.get('/:id', (req, res) => {
   }
 
   res.json(row);
-});
+}));
 
-function validatePosition({ current_bus_id, current_position, excludeTyreId }) {
+async function validatePosition({ current_bus_id, current_position, excludeTyreId }) {
   if (!current_bus_id) return null;
 
-  const bus = db.prepare('SELECT id, depot_id, bus_model_id FROM buses WHERE id = ?').get(current_bus_id);
+  const bus = await db.prepare('SELECT id, depot_id, bus_model_id FROM buses WHERE id = ?').get(current_bus_id);
   if (!bus) return { error: 'current_bus_id does not reference a valid bus' };
 
   if (current_position) {
-    const model = db.prepare('SELECT position_labels_json FROM bus_models WHERE id = ?').get(bus.bus_model_id);
+    const model = await db.prepare('SELECT position_labels_json FROM bus_models WHERE id = ?').get(bus.bus_model_id);
     const labels = JSON.parse(model.position_labels_json);
     if (!labels.includes(current_position)) {
       return { error: `current_position must be one of: ${labels.join(', ')}` };
     }
 
-    const occupant = db
+    const occupant = await db
       .prepare('SELECT id FROM tyres WHERE current_bus_id = ? AND current_position = ? AND id != ?')
       .get(current_bus_id, current_position, excludeTyreId || 0);
     if (occupant) {
@@ -125,7 +127,7 @@ function validatePosition({ current_bus_id, current_position, excludeTyreId }) {
   return { depotId: bus.depot_id };
 }
 
-router.post('/', authorize(...WRITE_ROLES), (req, res) => {
+router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const {
     tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status,
     current_bus_id, current_position, current_depot_id,
@@ -136,7 +138,7 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
     return res.status(400).json({ error: 'tyre_number and brand are required' });
   }
 
-  const posResult = validatePosition({ current_bus_id, current_position });
+  const posResult = await validatePosition({ current_bus_id, current_position });
   if (posResult?.error) return res.status(400).json({ error: posResult.error });
   const resolvedDepotId = posResult?.depotId ?? current_depot_id ?? null;
 
@@ -148,8 +150,8 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
     // Wrapped in a transaction so the tyre row and its opening lifecycle
     // event (purchase_intake) are never created independently of each other
     // -- tyre creation is no longer silent.
-    const created = db.transaction(() => {
-      const info = db
+    const created = await db.transaction(async () => {
+      const info = await db
         .prepare(`
           INSERT INTO tyres (tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status, current_bus_id, current_position, current_depot_id)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -170,9 +172,9 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
           resolvedDepotId
         );
 
-      const row = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(info.lastInsertRowid);
-      writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'tyre', entityId: row.id, after: row });
-      createTyreEvent(req.user, 'purchase_intake', {
+      const row = await db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(info.lastInsertRowid);
+      await writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'tyre', entityId: row.id, after: row });
+      await createTyreEvent(req.user, 'purchase_intake', {
         tyre_id: row.id,
         notes: 'Tyre record created',
         vendor_name: vendor_name || null,
@@ -185,7 +187,7 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
 
     res.status(201).json(created);
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A tyre with this tyre number already exists' });
     }
     if (err instanceof ApiError) {
@@ -193,10 +195,10 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
     }
     throw err;
   }
-});
+}));
 
-router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
-  const before = db.prepare('SELECT * FROM tyres WHERE id = ?').get(req.params.id);
+router.put('/:id', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Tyre not found' });
 
   if (isDepotScoped(req.user) && before.current_depot_id !== req.user.depot_id) {
@@ -210,12 +212,13 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   const pattern = req.body?.pattern ?? before.pattern;
   const ply_rating = req.body?.ply_rating ?? before.ply_rating;
   const purchase_date = req.body?.purchase_date ?? before.purchase_date;
+  const purchase_cost = req.body?.purchase_cost ?? before.purchase_cost;
   const initial_nsd = req.body?.initial_nsd ?? before.initial_nsd;
   const status = req.body?.status ?? before.status;
   const current_bus_id = req.body?.current_bus_id !== undefined ? req.body.current_bus_id : before.current_bus_id;
   const current_position = req.body?.current_position !== undefined ? req.body.current_position : before.current_position;
 
-  const posResult = validatePosition({ current_bus_id, current_position, excludeTyreId: before.id });
+  const posResult = await validatePosition({ current_bus_id, current_position, excludeTyreId: before.id });
   if (posResult?.error) return res.status(400).json({ error: posResult.error });
   const resolvedDepotId = current_bus_id
     ? posResult.depotId
@@ -243,44 +246,54 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   }
 
   try {
-    db.prepare(`
+    await db.prepare(`
       UPDATE tyres
-      SET tyre_number = ?, brand = ?, model = ?, size = ?, pattern = ?, ply_rating = ?, purchase_date = ?, initial_nsd = ?, status = ?,
-          current_bus_id = ?, current_position = ?, current_depot_id = ?, updated_at = datetime('now')
+      SET tyre_number = ?, brand = ?, model = ?, size = ?, pattern = ?, ply_rating = ?, purchase_date = ?, purchase_cost = ?, initial_nsd = ?, status = ?,
+          current_bus_id = ?, current_position = ?, current_depot_id = ?, updated_at = ${NOW_SQL}
       WHERE id = ?
-    `).run(tyre_number, brand, model, size, pattern || null, ply_rating || null, purchase_date, initial_nsd, status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
+    `).run(tyre_number, brand, model, size, pattern || null, ply_rating || null, purchase_date, purchase_cost ?? null, initial_nsd, status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A tyre with this tyre number already exists' });
     }
     throw err;
   }
 
-  const after = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'tyre', entityId: after.id, before, after });
+  const after = await db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'tyre', entityId: after.id, before, after });
   res.json(after);
-});
+}));
 
 // DELETE /api/tyres/:id - Permanently removes a tyre master record from the database.
 // Restricted exclusively to System Administrators.
-router.delete('/:id', authorize(ROLES.ADMIN), (req, res) => {
-  const before = db.prepare('SELECT * FROM tyres WHERE id = ?').get(req.params.id);
+router.delete('/:id', authorize(ROLES.ADMIN), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Tyre not found' });
 
-  db.prepare('DELETE FROM tyres WHERE id = ?').run(req.params.id);
-  writeAuditLog({ user: req.user, action: 'DELETE', entityType: 'tyre', entityId: before.id, before });
-  res.status(204).send();
-});
+  // tyre_events is a permanent, append-only record (NFR-07) -- deleting the
+  // tyre out from under it would either orphan that history or hit the raw
+  // FK constraint (tyre_events.tyre_id references tyres(id)), which used to
+  // surface as an unhandled 500. Mirrors the same has-dependents guard
+  // routes/buses.js already uses before deleting a bus with mounted tyres.
+  const hasHistory = await db.prepare('SELECT COUNT(*) c FROM tyre_events WHERE tyre_id = ?').get(req.params.id);
+  if (hasHistory.c > 0) {
+    return res.status(409).json({ error: 'Cannot delete a tyre that has recorded lifecycle history (its Tyre Card is a permanent record)' });
+  }
 
-router.get('/:id/export-pdf', async (req, res) => {
-  const tyre = db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
+  await db.prepare('DELETE FROM tyres WHERE id = ?').run(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'DELETE', entityType: 'tyre', entityId: before.id, before });
+  res.status(204).send();
+}));
+
+router.get('/:id/export-pdf', asyncHandler(async (req, res) => {
+  const tyre = await db.prepare(`${SELECT_TYRE} WHERE t.id = ?`).get(req.params.id);
   if (!tyre) return res.status(404).json({ error: 'Tyre not found' });
 
   if (isDepotScoped(req.user) && tyre.current_depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
 
-  const events = db.prepare(`
+  const events = await db.prepare(`
     SELECT
       e.*,
       b.registration_no AS bus_registration_no,
@@ -299,13 +312,13 @@ router.get('/:id/export-pdf', async (req, res) => {
   `).all(tyre.id);
 
   // Fetch latest readings
-  const latestNsd = db.prepare(`
+  const latestNsd = await db.prepare(`
     SELECT nsd_value, event_date FROM tyre_events
     WHERE tyre_id = ? AND event_type = 'nsd_reading'
     ORDER BY event_date DESC, id DESC LIMIT 1
   `).get(tyre.id);
 
-  const latestPressure = db.prepare(`
+  const latestPressure = await db.prepare(`
     SELECT pressure_value, event_date FROM tyre_events
     WHERE tyre_id = ? AND event_type = 'pressure_reading'
     ORDER BY event_date DESC, id DESC LIMIT 1
@@ -331,7 +344,7 @@ router.get('/:id/export-pdf', async (req, res) => {
       res.status(500).json({ error: 'Failed to build PDF' });
     }
   }
-});
+}));
 
 // Exported for reuse by the CSV Bulk Import workflow (utils/bulkImport.js),
 // which needs the identical position/depot validation for each imported row.

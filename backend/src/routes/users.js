@@ -1,9 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const db = require('../db');
+const { NOW_SQL, PG_ERRORS } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -34,7 +36,7 @@ function resolveDepotId(role, depot_id) {
 
 router.use(authenticate, authorize(...ADMIN_ONLY));
 
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { search = '', role, depot_id, is_active, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
   const params = {};
@@ -57,26 +59,26 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const total = db.prepare(`SELECT COUNT(*) c FROM users ${where}`).get(params).c;
+  const total = (await db.prepare(`SELECT COUNT(*) c FROM users ${where}`).get(params)).c;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const size = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
   const offset = (pageNum - 1) * size;
 
-  const rows = db
+  const rows = await db
     .prepare(`SELECT * FROM users ${where} ORDER BY full_name LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit: size, offset });
 
   res.json({ data: rows.map(serialize), total, page: pageNum, pageSize: size });
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'User not found' });
   res.json(serialize(row));
-});
+}));
 
-router.post('/', (req, res) => {
+router.post('/', asyncHandler(async (req, res) => {
   const { username, email, full_name, role, depot_id, password } = req.body || {};
 
   if (!username || !email || !full_name || !role || !password) {
@@ -95,26 +97,26 @@ router.post('/', (req, res) => {
   const passwordHash = bcrypt.hashSync(password, 10);
 
   try {
-    const info = db
+    const info = await db
       .prepare(`
         INSERT INTO users (username, email, password_hash, full_name, role, depot_id)
         VALUES (?, ?, ?, ?, ?, ?)
       `)
       .run(username, email, passwordHash, full_name, role, depotResult.depot_id);
 
-    const created = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-    writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'user', entityId: created.id, after: serialize(created) });
+    const created = await db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    await writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'user', entityId: created.id, after: serialize(created) });
     res.status(201).json(serialize(created));
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A user with this username or email already exists' });
     }
     throw err;
   }
-});
+}));
 
-router.put('/:id', (req, res) => {
-  const before = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+router.put('/:id', asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'User not found' });
 
   const username = req.body?.username ?? before.username;
@@ -131,54 +133,54 @@ router.put('/:id', (req, res) => {
   if (depotResult.error) return res.status(400).json({ error: depotResult.error });
 
   try {
-    db.prepare(`
-      UPDATE users SET username = ?, email = ?, full_name = ?, role = ?, depot_id = ?, updated_at = datetime('now')
+    await db.prepare(`
+      UPDATE users SET username = ?, email = ?, full_name = ?, role = ?, depot_id = ?, updated_at = ${NOW_SQL}
       WHERE id = ?
     `).run(username, email, full_name, role, depotResult.depot_id, req.params.id);
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A user with this username or email already exists' });
     }
     throw err;
   }
 
-  const after = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: after.id, before: serialize(before), after: serialize(after) });
+  const after = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: after.id, before: serialize(before), after: serialize(after) });
   res.json(serialize(after));
-});
+}));
 
-router.patch('/:id/status', (req, res) => {
+router.patch('/:id/status', asyncHandler(async (req, res) => {
   const { is_active } = req.body || {};
   if (is_active === undefined) return res.status(400).json({ error: 'is_active is required' });
 
-  const before = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  const before = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'User not found' });
 
   if (before.id === req.user.id && !is_active) {
     return res.status(400).json({ error: 'You cannot deactivate your own account' });
   }
 
-  db.prepare(`UPDATE users SET is_active = ?, updated_at = datetime('now') WHERE id = ?`).run(is_active ? 1 : 0, req.params.id);
+  await db.prepare(`UPDATE users SET is_active = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(is_active ? 1 : 0, req.params.id);
 
-  const after = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: after.id, before: serialize(before), after: serialize(after) });
+  const after = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: after.id, before: serialize(before), after: serialize(after) });
   res.json(serialize(after));
-});
+}));
 
-router.post('/:id/reset-password', (req, res) => {
+router.post('/:id/reset-password', asyncHandler(async (req, res) => {
   const { new_password } = req.body || {};
   if (!new_password || !PASSWORD_RULE.test(new_password)) {
     return res.status(400).json({ error: 'new_password must be at least 8 characters and include a letter and a number' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const passwordHash = bcrypt.hashSync(new_password, 10);
-  db.prepare(`UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?`).run(passwordHash, req.params.id);
+  await db.prepare(`UPDATE users SET password_hash = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(passwordHash, req.params.id);
 
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: user.id, before: { password: '(hidden)' }, after: { password: '(reset by admin)' } });
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: user.id, before: { password: '(hidden)' }, after: { password: '(reset by admin)' } });
   res.json({ message: 'Password reset successfully' });
-});
+}));
 
 module.exports = router;

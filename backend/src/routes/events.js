@@ -11,6 +11,7 @@ const { createTyreEvent, ApiError, AMENDABLE_FIELDS } = require('../utils/tyreEv
 const { validateNsd, validatePressure } = require('../utils/readingValidation');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -59,7 +60,7 @@ const SELECT_EVENT = `
 router.use(authenticate);
 
 // FR-TC-03: chronological history, filterable by event type and date range.
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { tyre_id, bus_id, event_type, from, to, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
   const params = {};
@@ -90,46 +91,46 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const total = db.prepare(`SELECT COUNT(*) c FROM tyre_events e ${where}`).get(params).c;
+  const total = (await db.prepare(`SELECT COUNT(*) c FROM tyre_events e ${where}`).get(params)).c;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const size = Math.min(200, Math.max(1, parseInt(pageSize, 10) || 20));
   const offset = (pageNum - 1) * size;
 
-  const rows = db
+  const rows = await db
     .prepare(`${SELECT_EVENT} ${where} ORDER BY e.event_date DESC, e.id DESC LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit: size, offset });
 
   res.json({ data: rows, total, page: pageNum, pageSize: size });
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare(`${SELECT_EVENT} WHERE e.id = ?`).get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const row = await db.prepare(`${SELECT_EVENT} WHERE e.id = ?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Event not found' });
   if (isDepotScoped(req.user) && row.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
   res.json(row);
-});
+}));
 
 // Dynamic single-event creation (Event Logging section). event_type in the
 // body selects which fields are required -- see utils/tyreEvents.js.
-router.post('/', authorize(...WRITE_ROLES), (req, res) => {
+router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const { event_type, ...payload } = req.body || {};
   if (!event_type) return res.status(400).json({ error: 'event_type is required' });
 
   try {
-    const events = createTyreEvent(req.user, event_type, payload);
+    const events = await createTyreEvent(req.user, event_type, payload);
     res.status(201).json(events.length === 1 ? events[0] : events);
   } catch (err) {
     handleEventError(err, res);
   }
-});
+}));
 
 // FR-RW-01: batch NSD + Pressure entry for every tyre currently mounted on a
 // bus, in one inspection session. Delegates to the same createTyreEvent() used
 // by the single-event route so validation/mutation logic is not duplicated.
-router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
+router.post('/batch', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const { bus_id, event_date, readings } = req.body || {};
   if (!bus_id || !Array.isArray(readings) || readings.length === 0) {
     return res.status(400).json({ error: 'bus_id and a non-empty readings array are required' });
@@ -150,10 +151,10 @@ router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
 
       try {
         if ((nsd_value !== undefined && nsd_value !== null && nsd_value !== '') || hasGrooveValue) {
-          created.push(...createTyreEvent(req.user, 'nsd_reading', { tyre_id, nsd_value, nsd_g1, nsd_g2, nsd_g3, nsd_g4, event_date }));
+          created.push(...(await createTyreEvent(req.user, 'nsd_reading', { tyre_id, nsd_value, nsd_g1, nsd_g2, nsd_g3, nsd_g4, event_date })));
         }
         if (pressure_value !== undefined && pressure_value !== null && pressure_value !== '') {
-          created.push(...createTyreEvent(req.user, 'pressure_reading', { tyre_id, pressure_value, event_date }));
+          created.push(...(await createTyreEvent(req.user, 'pressure_reading', { tyre_id, pressure_value, event_date })));
         }
       } catch (err) {
         if (err instanceof ApiError) {
@@ -169,14 +170,14 @@ router.post('/batch', authorize(...WRITE_ROLES), (req, res) => {
 
   // Returns 201 if at least one event was successfully logged, otherwise returns 400
   res.status(created.length ? 201 : 400).json({ created, errors });
-});
+}));
 
 // Excel Parity Gap-Closure: rotates every tyre on one bus in a single
 // session (the Excel's "Tyre Rotation" sheet swaps up to 6 positions at
 // once, each with its own NSD), instead of one rotation event at a time.
 // Mirrors /batch above exactly: delegates to the existing createTyreEvent
 // per tyre, one bad row doesn't roll back the others.
-router.post('/batch-rotation', authorize(...WRITE_ROLES), (req, res) => {
+router.post('/batch-rotation', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const { bus_id, event_date, odometer_km, rotations } = req.body || {};
   if (!bus_id || !Array.isArray(rotations) || rotations.length === 0) {
     return res.status(400).json({ error: 'bus_id and a non-empty rotations array are required' });
@@ -194,7 +195,7 @@ router.post('/batch-rotation', authorize(...WRITE_ROLES), (req, res) => {
       }
 
       try {
-        created.push(...createTyreEvent(req.user, 'rotation', { tyre_id, to_position, nsd_value, reason, odometer_km, event_date }));
+        created.push(...(await createTyreEvent(req.user, 'rotation', { tyre_id, to_position, nsd_value, reason, odometer_km, event_date })));
       } catch (err) {
         if (err instanceof ApiError) {
           errors.push({ tyre_id, error: err.message });
@@ -208,7 +209,7 @@ router.post('/batch-rotation', authorize(...WRITE_ROLES), (req, res) => {
   }
 
   res.status(created.length ? 201 : 400).json({ created, errors });
-});
+}));
 
 // Validates and coerces the corrected_values submitted to an amendment,
 // restricted to the field set that's amendable for the original event's
@@ -249,8 +250,8 @@ function cleanCorrectedValues(eventType, correctedValues) {
 
 // Tyre Card Amendment / Correction: layers a correction on top of an existing
 // tyre_events row without ever updating or deleting it (FR-TC-02/NFR-07).
-router.post('/:id/correct', authorize(...AMEND_ROLES), (req, res) => {
-  const event = db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
+router.post('/:id/correct', authorize(...AMEND_ROLES), asyncHandler(async (req, res) => {
+  const event = await db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found' });
   if (isDepotScoped(req.user) && event.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
@@ -271,14 +272,14 @@ router.post('/:id/correct', authorize(...AMEND_ROLES), (req, res) => {
     return handleEventError(err, res);
   }
 
-  const info = db.prepare(`
+  const info = await db.prepare(`
     INSERT INTO tyre_event_amendments (original_event_id, corrected_values_json, reason, amended_by)
     VALUES (?, ?, ?, ?)
   `).run(event.id, JSON.stringify(cleaned), reason, req.user.id);
 
-  const amendment = db.prepare(`${SELECT_AMENDMENT} WHERE a.id = ?`).get(info.lastInsertRowid);
+  const amendment = await db.prepare(`${SELECT_AMENDMENT} WHERE a.id = ?`).get(info.lastInsertRowid);
 
-  writeAuditLog({
+  await writeAuditLog({
     user: req.user,
     action: 'AMEND_EVENT',
     entityType: 'tyre_event',
@@ -288,21 +289,21 @@ router.post('/:id/correct', authorize(...AMEND_ROLES), (req, res) => {
   });
 
   res.status(201).json(amendment);
-});
+}));
 
 // Full amendment history for one tyre_events row, oldest first (newest last)
 // so the UI can render Original -> Correction #1 -> Correction #2 -> ...
-router.get('/:id/amendments', (req, res) => {
-  const event = db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
+router.get('/:id/amendments', asyncHandler(async (req, res) => {
+  const event = await db.prepare('SELECT * FROM tyre_events WHERE id = ?').get(req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found' });
   if (isDepotScoped(req.user) && event.depot_id !== req.user.depot_id) {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
 
-  const rows = db
+  const rows = await db
     .prepare(`${SELECT_AMENDMENT} WHERE a.original_event_id = ? ORDER BY a.amended_at ASC, a.id ASC`)
     .all(event.id);
   res.json(rows);
-});
+}));
 
 module.exports = router;

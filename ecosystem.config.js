@@ -15,11 +15,19 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
       },
-      // better-sqlite3 keeps a synchronous file handle open; a clean SIGTERM
-      // (handled in src/index.js) lets it close the DB before PM2 kills it.
+      // A clean SIGTERM (handled in src/index.js) closes the HTTP server,
+      // stops the pg-boss job queue gracefully, and closes the Postgres
+      // pool before PM2 kills the process.
       kill_timeout: 5000,
       max_restarts: 10,
       restart_delay: 2000,
+      // Zip-bomb defense in depth (README.md's "Memory limit" note): the
+      // MIS Excel importer's row/cell ceilings run only after a workbook
+      // has already been decompressed into memory, so this is the actual
+      // backstop against a genuinely adversarial file. 1GB is a starting
+      // point, not a measured figure -- size it to what this VM can
+      // actually spare before relying on it.
+      max_memory_restart: '1G',
     },
     {
       name: 'ebtms-frontend',

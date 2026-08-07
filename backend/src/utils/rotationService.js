@@ -92,7 +92,7 @@ function listInServiceTyresWithLastRotation(depotId) {
       LEFT JOIN buses b ON b.id = t.current_bus_id
       WHERE ${clauses.join(' AND ')}
     `)
-    .all(params);
+    .all(params); // returns a Promise -- callers must await
 }
 
 /**
@@ -101,10 +101,10 @@ function listInServiceTyresWithLastRotation(depotId) {
  * @param {number|null} [depotId]
  * @returns {Array<object>}
  */
-function syncRotationAlerts(depotId) {
-  const dayThreshold = resolveThreshold('ROTATION_INTERVAL', {});
-  const kmThreshold = resolveThreshold('ROTATION_INTERVAL_KM', {});
-  const tyres = listInServiceTyresWithLastRotation(depotId);
+async function syncRotationAlerts(depotId) {
+  const dayThreshold = await resolveThreshold('ROTATION_INTERVAL', {});
+  const kmThreshold = await resolveThreshold('ROTATION_INTERVAL_KM', {});
+  const tyres = await listInServiceTyresWithLastRotation(depotId);
   const results = [];
 
   for (const tyre of tyres) {
@@ -115,7 +115,7 @@ function syncRotationAlerts(depotId) {
     });
 
     if (status === 'Overdue') {
-      upsertBreachAlert({
+      await upsertBreachAlert({
         tyreId: tyre.id,
         busId: tyre.current_bus_id,
         depotId: tyre.current_depot_id,
@@ -126,7 +126,7 @@ function syncRotationAlerts(depotId) {
         triggeringEventId: null,
       });
     } else {
-      autoResolveAlert({ tyreId: tyre.id, parameterType: 'ROTATION', resolvedByUserId: null });
+      await autoResolveAlert({ tyreId: tyre.id, parameterType: 'ROTATION', resolvedByUserId: null });
     }
     results.push({ tyreId: tyre.id, status, daysSinceLastRotation, kmSinceLastRotation });
   }

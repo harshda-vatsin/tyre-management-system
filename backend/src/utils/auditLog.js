@@ -23,8 +23,12 @@ const insertAudit = db.prepare(`
  * @param {object} [params.before] - Optional historical snapshot of the record state before mutation
  * @param {object} [params.after] - Optional snapshot of the record state after mutation
  */
+// Returns the underlying insert's promise -- callers must `await` this (it
+// used to be a synchronous better-sqlite3 call, so every call site already
+// relied on the audit row existing by the time writeAuditLog() returned;
+// under Postgres that guarantee only holds if the promise is awaited).
 function writeAuditLog({ user, action, entityType, entityId, before, after }) {
-  insertAudit.run({
+  return insertAudit.run({
     user_id: user?.id ?? null,
     username: user?.username ?? 'system',
     action,

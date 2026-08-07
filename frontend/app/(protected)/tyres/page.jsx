@@ -21,19 +21,26 @@ const IMPORT_COLUMNS = [
   { key: 'brand', required: true, example: 'MRF' },
   { key: 'model', example: 'ZTX' },
   { key: 'size', example: '295/80R22.5' },
+  { key: 'pattern', example: 'JTH-1' },
+  { key: 'ply_rating', example: '16' },
   { key: 'purchase_date', example: '2025-01-15' },
+  { key: 'purchase_cost', example: '' },
   { key: 'initial_nsd', example: '18' },
   { key: 'status', example: 'In Store' },
-  { key: 'current_bus_id', example: '' },
-  { key: 'current_position', example: '' },
-  { key: 'current_depot_id', example: '2' },
+  { key: 'current_bus_id', example: '', hint: 'ID or bus registration number' },
+  { key: 'current_position', example: '', hint: 'e.g. FL, FR, RLO - must match the bus model layout' },
+  { key: 'current_depot_id', example: '2', hint: 'ID, name, or code' },
+  { key: 'vendor_name', example: '' },
+  { key: 'gate_pass_no', example: '' },
+  { key: 'invoice_no', example: '' },
+  { key: 'invoice_date', example: '' },
 ];
 
 const STATUS_OPTIONS = ALL_STATUSES;
 
 function emptyForm(defaultDepotId) {
   return {
-    tyre_number: '', brand: '', model: '', size: '', pattern: '', ply_rating: '', purchase_date: '', initial_nsd: '',
+    tyre_number: '', brand: '', model: '', size: '', pattern: '', ply_rating: '', purchase_date: '', purchase_cost: '', initial_nsd: '',
     status: 'In Store', current_bus_id: '', current_position: '', current_depot_id: defaultDepotId || '',
     vendor_name: '', gate_pass_no: '', invoice_no: '', invoice_date: '',
   };
@@ -117,6 +124,7 @@ export default function TyresPage() {
       pattern: tyre.pattern || '',
       ply_rating: tyre.ply_rating || '',
       purchase_date: tyre.purchase_date || '',
+      purchase_cost: tyre.purchase_cost ?? '',
       initial_nsd: tyre.initial_nsd ?? '',
       status: tyre.status,
       current_bus_id: tyre.current_bus_id || '',
@@ -140,6 +148,7 @@ export default function TyresPage() {
       const payload = {
         ...form,
         initial_nsd: form.initial_nsd === '' ? null : Number(form.initial_nsd),
+        purchase_cost: form.purchase_cost === '' ? null : Number(form.purchase_cost),
         current_bus_id: form.current_bus_id ? Number(form.current_bus_id) : null,
         current_position: form.current_bus_id ? form.current_position : null,
         current_depot_id: form.current_depot_id ? Number(form.current_depot_id) : null,
@@ -311,6 +320,10 @@ export default function TyresPage() {
             <div className="field">
               <label>Date of Purchase</label>
               <input type="date" value={form.purchase_date} onChange={(e) => setForm({ ...form, purchase_date: e.target.value })} />
+            </div>
+            <div className="field">
+              <label>Purchase Cost</label>
+              <input type="number" step="0.01" value={form.purchase_cost} onChange={(e) => setForm({ ...form, purchase_cost: e.target.value })} />
             </div>
             <div className="field">
               <label>Initial NSD</label>

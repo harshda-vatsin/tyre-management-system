@@ -14,6 +14,7 @@ const { parse } = require('csv-parse/sync');
 const { authenticate } = require('../middleware/auth');
 const { ROLES } = require('../utils/roles');
 const { importDepotRow, importBusRow, importTyreRow } = require('../utils/bulkImport');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -40,7 +41,7 @@ function parseCsv(buffer) {
 
 router.use(authenticate);
 
-router.post('/:entity', upload.single('file'), (req, res) => {
+router.post('/:entity', upload.single('file'), asyncHandler(async (req, res) => {
   const config = IMPORTERS[req.params.entity];
   if (!config) return res.status(404).json({ error: `Unknown import entity: ${req.params.entity}` });
   if (!config.roles.includes(req.user.role)) {
@@ -58,18 +59,21 @@ router.post('/:entity', upload.single('file'), (req, res) => {
 
   const created = [];
   const errors = [];
-  rows.forEach((row, idx) => {
+  // Sequential (not Promise.all) so rows are attempted in file order and one
+  // bad row's error doesn't race with others -- import volume here is a
+  // human-authored CSV, not a scale where sequential await matters.
+  for (let idx = 0; idx < rows.length; idx += 1) {
     const rowNum = idx + 2; // +1 for header row, +1 to convert 0-index to 1-index
     try {
-      const result = config.fn(req.user, row);
+      const result = await config.fn(req.user, rows[idx]);
       if (result.error) errors.push({ row: rowNum, error: result.error });
       else created.push(result.created);
     } catch (err) {
       errors.push({ row: rowNum, error: err.message });
     }
-  });
+  }
 
   res.status(created.length ? 201 : 400).json({ created, errors, totalRows: rows.length });
-});
+}));
 
 module.exports = router;

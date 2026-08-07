@@ -3,18 +3,19 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { JWT_SECRET } = require('../middleware/auth');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
 
-router.post('/login', (req, res) => {
+router.post('/login', asyncHandler(async (req, res) => {
   const { username, password } = req.body || {};
 
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  const user = await db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
   if (!user || !user.is_active) {
     return res.status(401).json({ error: 'Invalid credentials' });
@@ -32,6 +33,6 @@ router.post('/login', (req, res) => {
     token,
     user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, depot_id: user.depot_id },
   });
-});
+}));
 
 module.exports = router;

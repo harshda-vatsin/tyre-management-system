@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const db = require('../db');
+const { isPreviewMode } = require('../misImport/replayContext');
 
 // FR-AL-01: "Notify the Depot Manager via in-app notification and email
 // (configurable)." Configurable means SMTP delivery only activates when an
@@ -56,14 +57,21 @@ function formatAlertEmail(alert, tyre, depot, busReg) {
  * @param {object} alert - The created/updated alert database row
  */
 async function sendEmailNotification(alert) {
+  // MIS import preview (§4): a dry-run's DB writes roll back, but an email
+  // already sent can't be un-sent -- any code reaching outside the current
+  // transaction has to check replay context explicitly.
+  if (isPreviewMode()) {
+    console.log(`[NotificationService] Preview mode -- would have emailed a notification for alert #${alert.id}; not sent.`);
+    return;
+  }
   try {
-    const tyre = db.prepare('SELECT tyre_number, current_bus_id, current_position, current_depot_id FROM tyres WHERE id = ?').get(alert.tyre_id);
+    const tyre = await db.prepare('SELECT tyre_number, current_bus_id, current_position, current_depot_id FROM tyres WHERE id = ?').get(alert.tyre_id);
     if (!tyre) {
       console.error(`[NotificationService] Failed to resolve tyre for alert ID: ${alert.id}`);
       return;
     }
 
-    const depot = db.prepare('SELECT name FROM depots WHERE id = ?').get(alert.depot_id);
+    const depot = await db.prepare('SELECT name FROM depots WHERE id = ?').get(alert.depot_id);
     if (!depot) {
       console.error(`[NotificationService] Failed to resolve depot for alert ID: ${alert.id}`);
       return;
@@ -71,11 +79,11 @@ async function sendEmailNotification(alert) {
 
     let busReg = '—';
     if (tyre.current_bus_id) {
-      const bus = db.prepare('SELECT registration_no FROM buses WHERE id = ?').get(tyre.current_bus_id);
+      const bus = await db.prepare('SELECT registration_no FROM buses WHERE id = ?').get(tyre.current_bus_id);
       if (bus) busReg = bus.registration_no;
     }
 
-    const manager = db.prepare(`
+    const manager = await db.prepare(`
       SELECT email, full_name FROM users
       WHERE role = 'Depot Manager' AND depot_id = ? AND is_active = 1
       LIMIT 1

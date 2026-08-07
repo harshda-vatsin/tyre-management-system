@@ -74,6 +74,22 @@ const EVENT_TYPES = [
   'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim', 'scrap', 'scrap_disposal',
 ];
 
+// Canonical outcome vocabulary, keyed by event type -- the single source
+// both the DB CHECK constraint (generated from this, see db.js's
+// buildOutcomeCheckSql) and every createXxx() handler in tyreEvents.js
+// validate against. retread_completed and warranty_claim both write to
+// tyre_events.outcome but mean different things by it (a binary vendor
+// result vs. a three-state claim workflow), which is exactly what let them
+// drift apart before: two hardcoded arrays, one per handler, with nothing
+// tying either to what the DB would actually accept. Only event types
+// listed here may ever pass a non-null outcome; that is enforced by
+// generating the CHECK constraint from this map, not by trusting every
+// caller to stay in sync with it by hand.
+const EVENT_OUTCOMES = {
+  retread_completed: ['Done', 'Rejected'],
+  warranty_claim: ['approved', 'rejected', 'closed'],
+};
+
 function assertKnownStatus(status) {
   if (!ALL_STATUSES.includes(status)) {
     throw new Error(`Unknown tyre lifecycle status: ${status}`);
@@ -93,6 +109,7 @@ module.exports = {
   normalizeStatus,
   TRANSITIONS,
   EVENT_TYPES,
+  EVENT_OUTCOMES,
   assertKnownStatus,
   canTransition,
 };

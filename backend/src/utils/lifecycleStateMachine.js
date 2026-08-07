@@ -9,6 +9,7 @@
  */
 
 const db = require('../db');
+const { NOW_SQL } = db;
 const { canTransition, assertKnownStatus } = require('./tyreLifecycle');
 const { ApiError } = require('./apiError');
 
@@ -31,8 +32,8 @@ function assertValidTransition(fromStatus, toStatus) {
  * @param {{current_bus_id?: number|null, current_position?: string|null, current_depot_id?: number|null, current_package_id?: number|null}} locationFields
  * @returns {{before: object, after: object}}
  */
-function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
-  const before = db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
+async function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
+  const before = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
   if (!before) throw new ApiError(404, `Tyre ${tyreId} not found`);
 
   assertValidTransition(before.status, newStatus);
@@ -45,12 +46,12 @@ function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
     current_package_id: locationFields.current_package_id !== undefined ? locationFields.current_package_id : before.current_package_id,
   };
 
-  db.prepare(`
-    UPDATE tyres SET status = ?, current_bus_id = ?, current_position = ?, current_depot_id = ?, current_package_id = ?, updated_at = datetime('now')
+  await db.prepare(`
+    UPDATE tyres SET status = ?, current_bus_id = ?, current_position = ?, current_depot_id = ?, current_package_id = ?, updated_at = ${NOW_SQL}
     WHERE id = ?
   `).run(merged.status, merged.current_bus_id, merged.current_position, merged.current_depot_id, merged.current_package_id, tyreId);
 
-  const after = db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
+  const after = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
   return { before, after };
 }
 

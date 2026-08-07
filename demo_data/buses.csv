@@ -1,0 +1,6 @@
+Bus_ID,Registration_Number,Depot_ID,Model,Status
+B101,MH-12-AB-1234,D001,Tata Marcopolo,Active
+B102,MH-12-AB-1235,D001,Ashok Leyland,Active
+B103,MH-14-CD-5678,D002,Volvo 8400,Maintenance
+B104,MH-14-CD-5679,D002,Tata Marcopolo,Active
+B105,MH-04-EF-9012,D003,Ashok Leyland,Active

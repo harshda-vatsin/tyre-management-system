@@ -21,11 +21,12 @@ import CsvImportModal from '../../../components/CsvImportModal.jsx';
 const IMPORT_COLUMNS = [
   { key: 'registration_no', required: true, example: 'DL01AB1234' },
   { key: 'chassis_no', required: true, example: 'VIN123456789' },
-  { key: 'bus_model_id', required: true, example: '1' },
-  { key: 'depot_id', required: true, example: '2' },
+  { key: 'bus_model_id', required: true, example: '1', hint: 'ID or model name' },
+  { key: 'depot_id', required: true, example: '2', hint: 'ID, name, or code' },
   { key: 'year_of_manufacture', required: true, example: '2024' },
   { key: 'date_of_entry_into_fleet', required: true, example: '2024-05-10' },
   { key: 'status', example: 'Active' },
+  { key: 'package_id', example: '', hint: 'ID, name, or code' },
 ];
 
 const STATUS_OPTIONS = ['Active', 'Under Maintenance', 'Decommissioned'];

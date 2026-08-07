@@ -1,8 +1,10 @@
 const express = require('express');
 const db = require('../db');
+const { NOW_SQL, PG_ERRORS } = db;
 const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -64,7 +66,7 @@ function validateDateOfEntry(value) {
 
 router.use(authenticate);
 
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { search = '', depot_id, status, bus_model_id, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
   const params = {};
@@ -91,21 +93,21 @@ router.get('/', (req, res) => {
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const total = db.prepare(`SELECT COUNT(*) c FROM buses b ${where}`).get(params).c;
+  const total = (await db.prepare(`SELECT COUNT(*) c FROM buses b ${where}`).get(params)).c;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const size = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
   const offset = (pageNum - 1) * size;
 
-  const rows = db
+  const rows = await db
     .prepare(`${SELECT_BUS} ${where} ORDER BY b.registration_no LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit: size, offset });
 
   res.json({ data: rows.map(serialize), total, page: pageNum, pageSize: size });
-});
+}));
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const row = await db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Bus not found' });
 
   if (isDepotScoped(req.user) && row.depot_id !== req.user.depot_id) {
@@ -116,7 +118,7 @@ router.get('/:id', (req, res) => {
   // FR-TC-04: position map needs last NSD, last pressure, and last event date
   // per mounted tyre, sourced live from the tyre card (tyre_events) -- not
   // denormalized onto the tyre row, so there is one source of truth.
-  const mountedTyres = db
+  const mountedTyres = await db
     .prepare(`
       SELECT
         t.id, t.tyre_number, t.current_position, t.status,
@@ -136,9 +138,9 @@ router.get('/:id', (req, res) => {
   }));
 
   res.json(bus);
-});
+}));
 
-router.post('/', authorize(...WRITE_ROLES), (req, res) => {
+router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const {
     bus_model_id,
     depot_id,
@@ -164,16 +166,16 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
     return res.status(403).json({ error: 'Not authorized to create a bus in this depot' });
   }
 
-  const model = db.prepare('SELECT id FROM bus_models WHERE id = ?').get(bus_model_id);
+  const model = await db.prepare('SELECT id FROM bus_models WHERE id = ?').get(bus_model_id);
   if (!model) return res.status(400).json({ error: 'bus_model_id does not reference a valid bus model' });
 
-  const depot = db.prepare('SELECT id, is_active FROM depots WHERE id = ?').get(depot_id);
+  const depot = await db.prepare('SELECT id, is_active FROM depots WHERE id = ?').get(depot_id);
   if (!depot) return res.status(400).json({ error: 'depot_id does not reference a valid depot' });
   // FR-DM-02: a deactivated depot shall not accept new entries against it.
   if (!depot.is_active) return res.status(400).json({ error: 'This depot is deactivated and cannot accept new buses' });
 
   try {
-    const info = db
+    const info = await db
       .prepare(`
         INSERT INTO buses (depot_id, package_id, registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -189,19 +191,19 @@ router.post('/', authorize(...WRITE_ROLES), (req, res) => {
         status || 'Active'
       );
 
-    const created = db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(info.lastInsertRowid);
-    writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'bus', entityId: created.id, after: created });
+    const created = await db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(info.lastInsertRowid);
+    await writeAuditLog({ user: req.user, action: 'CREATE', entityType: 'bus', entityId: created.id, after: created });
     res.status(201).json(serialize(created));
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A bus with this registration number or chassis number already exists' });
     }
     throw err;
   }
-});
+}));
 
-router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
-  const before = db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
+router.put('/:id', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Bus not found' });
 
   if (isDepotScoped(req.user) && before.depot_id !== req.user.depot_id) {
@@ -230,42 +232,42 @@ router.put('/:id', authorize(...WRITE_ROLES), (req, res) => {
   if (dateError) return res.status(400).json({ error: dateError });
 
   try {
-    const runUpdate = db.transaction(() => {
-      db.prepare(`
+    const runUpdate = db.transaction(async () => {
+      await db.prepare(`
         UPDATE buses
         SET registration_no = ?, chassis_no = ?, bus_model_id = ?, year_of_manufacture = ?,
-            date_of_entry_into_fleet = ?, status = ?, odometer_km = ?, package_id = ?, updated_at = datetime('now')
+            date_of_entry_into_fleet = ?, status = ?, odometer_km = ?, package_id = ?, updated_at = ${NOW_SQL}
         WHERE id = ?
       `).run(registration_no, chassis_no, bus_model_id, year_of_manufacture, date_of_entry_into_fleet, status, odometer_km, package_id || null, req.params.id);
       // Tyres inherit current_package_id from their mounted bus the same way
       // they inherit current_depot_id -- keep them in sync on reassignment.
       if ((package_id || null) !== before.package_id) {
-        db.prepare(`UPDATE tyres SET current_package_id = ?, updated_at = datetime('now') WHERE current_bus_id = ?`).run(package_id || null, req.params.id);
+        await db.prepare(`UPDATE tyres SET current_package_id = ?, updated_at = ${NOW_SQL} WHERE current_bus_id = ?`).run(package_id || null, req.params.id);
       }
     });
-    runUpdate();
+    await runUpdate();
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A bus with this registration number or chassis number already exists' });
     }
     throw err;
   }
 
-  const after = db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
-  writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'bus', entityId: after.id, before, after: { ...after, depot_id } });
+  const after = await db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'bus', entityId: after.id, before, after: { ...after, depot_id } });
   res.json(serialize(after));
-});
+}));
 
 // FR-BM-03: transfer a bus between depots. Cascades to every tyre currently
 // mounted on the bus so their current_depot_id stays consistent.
-router.post('/:id/transfer', authorize(...TRANSFER_ROLES), (req, res) => {
+router.post('/:id/transfer', authorize(...TRANSFER_ROLES), asyncHandler(async (req, res) => {
   const { to_depot_id, notes } = req.body || {};
   if (!to_depot_id) return res.status(400).json({ error: 'to_depot_id is required' });
 
-  const bus = db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
+  const bus = await db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
   if (!bus) return res.status(404).json({ error: 'Bus not found' });
 
-  const destDepot = db.prepare('SELECT id, is_active FROM depots WHERE id = ?').get(to_depot_id);
+  const destDepot = await db.prepare('SELECT id, is_active FROM depots WHERE id = ?').get(to_depot_id);
   if (!destDepot) return res.status(400).json({ error: 'to_depot_id does not reference a valid depot' });
   // FR-DM-02: a deactivated depot shall not accept new entries against it.
   if (!destDepot.is_active) return res.status(400).json({ error: 'Destination depot is deactivated and cannot accept transfers' });
@@ -276,15 +278,15 @@ router.post('/:id/transfer', authorize(...TRANSFER_ROLES), (req, res) => {
 
   const fromDepotId = bus.depot_id;
 
-  const runTransfer = db.transaction(() => {
-    db.prepare(`UPDATE buses SET depot_id = ?, updated_at = datetime('now') WHERE id = ?`).run(to_depot_id, req.params.id);
-    db.prepare(`UPDATE tyres SET current_depot_id = ?, updated_at = datetime('now') WHERE current_bus_id = ?`).run(to_depot_id, req.params.id);
+  const runTransfer = db.transaction(async () => {
+    await db.prepare(`UPDATE buses SET depot_id = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(to_depot_id, req.params.id);
+    await db.prepare(`UPDATE tyres SET current_depot_id = ?, updated_at = ${NOW_SQL} WHERE current_bus_id = ?`).run(to_depot_id, req.params.id);
   });
-  runTransfer();
+  await runTransfer();
 
-  const after = db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
+  const after = await db.prepare(`${SELECT_BUS} WHERE b.id = ?`).get(req.params.id);
 
-  writeAuditLog({
+  await writeAuditLog({
     user: req.user,
     action: 'TRANSFER',
     entityType: 'bus',
@@ -294,21 +296,21 @@ router.post('/:id/transfer', authorize(...TRANSFER_ROLES), (req, res) => {
   });
 
   res.json(serialize(after));
-});
+}));
 
-router.delete('/:id', authorize(ROLES.ADMIN), (req, res) => {
-  const before = db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
+router.delete('/:id', authorize(ROLES.ADMIN), asyncHandler(async (req, res) => {
+  const before = await db.prepare('SELECT * FROM buses WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Bus not found' });
 
-  const inUse = db.prepare('SELECT COUNT(*) c FROM tyres WHERE current_bus_id = ?').get(req.params.id);
+  const inUse = await db.prepare('SELECT COUNT(*) c FROM tyres WHERE current_bus_id = ?').get(req.params.id);
   if (inUse.c > 0) {
     return res.status(409).json({ error: 'Cannot delete a bus that still has tyres mounted on it' });
   }
 
-  db.prepare('DELETE FROM buses WHERE id = ?').run(req.params.id);
-  writeAuditLog({ user: req.user, action: 'DELETE', entityType: 'bus', entityId: before.id, before });
+  await db.prepare('DELETE FROM buses WHERE id = ?').run(req.params.id);
+  await writeAuditLog({ user: req.user, action: 'DELETE', entityType: 'bus', entityId: before.id, before });
   res.status(204).send();
-});
+}));
 
 // Exported for reuse by the CSV Bulk Import workflow (utils/bulkImport.js),
 // which needs the identical code-normalization and field validation for each

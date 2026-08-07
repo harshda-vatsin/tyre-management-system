@@ -7,11 +7,17 @@ threshold-based alerting, role-based access control, and a full audit trail.
 ## Stack
 
 - **Backend**: Node.js + Express, JWT auth, bcrypt password hashing,
-  SQLite via `better-sqlite3`
+  PostgreSQL via `pg` (a hand-written better-sqlite3-shaped adapter in
+  `db.js`, so most route/service code reads like synchronous SQLite calls
+  with `await` added)
 - **Frontend**: Next.js (App Router), plain CSS — a pure client-rendered
   SPA against the Express API (no Next.js API routes / server actions;
   the Express backend remains the only server)
-- **Storage**: file-based SQLite at `backend/data/ebtms.sqlite`
+- **Storage**: PostgreSQL (`DATABASE_URL` in `backend/.env`); uploaded MIS
+  Excel workbooks are kept on local disk at `backend/uploads/mis-imports/`
+  (created automatically on first upload)
+- **Background jobs**: `pg-boss` (Postgres-native queue, same database --
+  no Redis/separate broker) for the MIS Excel importer's Confirm phase
 
 ## Project layout
 
@@ -25,10 +31,14 @@ ebtms/
       middleware/    auth.js — JWT verification + role-based access control
       utils/         roles.js (shared role constants), auditLog.js,
                       tyreEvents.js, readingValidation.js
-      db.js          schema + connection
+      db.js          schema (idempotent CREATE TABLE IF NOT EXISTS, applied
+                      on every boot) + Postgres connection pool
+      misImport/     MIS Excel importer: parsers, Replay Engine, pg-boss
+                      job queue, import session store
       seed.js        seed script (depots, bus models, buses, tyres, users,
                       thresholds)
-      index.js       Express app entry point
+      index.js       Express app entry point -- also starts the pg-boss
+                      job queue before accepting HTTP connections
   frontend/
     app/             Next.js App Router routes. (protected)/ route group
                       shares one auth-guarded layout (sidebar + topbar);
@@ -43,12 +53,20 @@ ebtms/
 
 ## Setup
 
+Requires a running PostgreSQL instance first (a local Docker container is
+the easiest path for dev: `docker run -d --name ebtms-pg -e POSTGRES_PASSWORD=devpassword -p 5432:5432 postgres:16`,
+then create the `ebtms` database). `backend/.env`'s `DATABASE_URL` must
+point at it before anything else below will connect.
+
 ```bash
 # Backend
 cd ebtms/backend
 npm ci
+cp .env.example .env   # set DATABASE_URL if it differs from the default
 npm run seed     # wipes and reseeds all tables with demo data
-npm start        # http://localhost:4000
+npm start        # http://localhost:4000 -- also creates the MIS schema,
+                  # the pg-boss job-queue schema, and backend/uploads/ on
+                  # first run
 
 # Frontend (separate terminal)
 cd ebtms/frontend
@@ -130,21 +148,36 @@ All seeded users share the password `Passw0rd!`.
   registry backs preview and export identically; report 9 reuses
   `inspectionService` directly rather than redefining "overdue".
 
-**Explicitly deferred**: notifications (email/SMS/WhatsApp), QR
-scanning, the printable tyre-card PDF specifically (only the 10
-standard reports were in scope), 2FA, ERP integration, scheduled/emailed
-reports.
+- **MIS Excel Import** (Admin-only, `/admin/mis-import`): imports the
+  company's monthly MIS workbook -- Consumption, Puncture Repair,
+  Retread, Scrap, Warranty, NSD, Rotation, and Wheel Alignment sheets --
+  as a permanent, immutable system-of-record (`mis_*` tables) that
+  generates lifecycle events through the same `createTyreEvent()` path
+  as manual entry, never bypassing it. Two-phase: a synchronous Preview
+  (parse + validate + a dry-run replay that's rolled back, so nothing is
+  written) followed by a background-job Confirm (`pg-boss`) that commits
+  for real, with live progress reporting. Duplicate re-imports are
+  detected via a fingerprint hashed over resolved references (new / exact
+  duplicate / conflicting duplicate). Admin-only kill switch
+  (`mis_import_enabled` under System Parameters) and zip-bomb/row-count
+  limits guard the upload path.
+
+**Explicitly deferred**: notifications (email/SMS/WhatsApp) beyond the
+existing threshold-alert emails, QR scanning, the printable tyre-card PDF
+specifically (only the 10 standard reports were in scope), 2FA, ERP
+integration, scheduled/emailed reports, mid-job cancellation for the MIS
+importer (only "cancel before it starts running" is implemented).
 
 See the requirement traceability matrix in project history for the
 full FR-to-file mapping.
 
-## Production Deployment (Linux VM, no Docker)
+## Production Deployment (Linux VM)
 
 Architecture: `Browser → Nginx → Next.js (PM2, :3000)` and
-`Browser → Nginx /api → Express (PM2, :4000) → SQLite`. Nginx is the only
-public entry point; both Node processes bind to `127.0.0.1` and are never
-exposed directly. See `deploy/nginx.conf` and `ecosystem.config.js` at the
-repo root.
+`Browser → Nginx /api → Express (PM2, :4000) → PostgreSQL`. Nginx is the
+only public entry point; both Node processes and Postgres bind to
+`127.0.0.1` and are never exposed directly. See `deploy/nginx.conf` and
+`ecosystem.config.js` at the repo root.
 
 ```bash
 # 1. System prerequisites (Node 18.17+, matches Next.js 14's requirement)
@@ -152,31 +185,38 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs nginx build-essential python3
 sudo npm ci -g pm2
 
-# 2. Get the code
+# 2. PostgreSQL (skip if using an already-managed instance -- just make
+#    sure DATABASE_URL in step 4 points at it)
+sudo apt-get install -y postgresql
+sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '<a-real-password>';"
+sudo -u postgres createdb ebtms
+
+# 3. Get the code
 git clone <your-repo-url> ebtms
 cd ebtms
 
-# 3. Backend
+# 4. Backend
 cd backend
 npm ci
 cp .env.example .env
-# edit .env: set a real JWT_SECRET (openssl rand -hex 32), leave PORT/HOST
+# edit .env: set a real JWT_SECRET (openssl rand -hex 32) and DATABASE_URL
+# (postgres://postgres:<password>@localhost:5432/ebtms), leave PORT/HOST
 npm run seed        # first deploy only -- wipes all tables, seeds demo data
 cd ..
 
-# 4. Frontend
+# 5. Frontend
 cd frontend
 npm ci
 cp .env.example .env   # defaults are correct for same-VM deployment
 npm run build
 cd ..
 
-# 5. Start both under PM2
+# 6. Start both under PM2
 pm2 start ecosystem.config.js
 pm2 save
 pm2 startup          # run the command it prints (systemd service, survives reboot)
 
-# 6. Nginx
+# 7. Nginx
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/ebtms
 sudo sed -i 's/YOUR_DOMAIN_OR_VM_IP/<your-domain-or-ip>/' /etc/nginx/sites-available/ebtms
 sudo ln -s /etc/nginx/sites-available/ebtms /etc/nginx/sites-enabled/
@@ -184,18 +224,29 @@ sudo rm -f /etc/nginx/sites-enabled/default   # avoid a default-site conflict
 sudo nginx -t
 sudo systemctl reload nginx
 
-# 7. Health check
+# 8. Health check
 curl -I http://localhost/            # expect 200 from Next.js
 curl -s http://localhost/api/health  # expect {"status":"ok"}
 ```
 
-`backend/data/` (SQLite file + WAL) must exist and be writable by the OS
-user running PM2 -- `db.js` creates it automatically on first run, but
-confirm ownership if PM2 runs as a dedicated service user rather than the
-account that cloned the repo.
+The backend creates everything it needs on first boot -- the application
+schema, `pg-boss`'s own queue schema, and `backend/uploads/mis-imports/`
+(uploaded MIS workbooks) -- as long as the OS user running PM2 can connect
+to Postgres and write to the `backend/` directory. No separate migration
+step.
 
 `npm run seed` is destructive (`DELETE FROM` on every table) -- run it once
 against a fresh database, never again against one with real data.
+
+### Memory limit (zip-bomb defense in depth)
+
+The MIS Excel importer rejects implausibly large workbooks at the
+application level (`backend/src/misImport/workbookLimits.js`), but that
+guard runs *after* the file is already decompressed in memory. The real
+backstop against a genuinely adversarial file is a process memory limit --
+`ecosystem.config.js` sets `max_memory_restart` on the backend process for
+exactly this; confirm it's still appropriate for your VM's available RAM
+before going live, rather than assuming the default is right.
 
 ### HTTPS and the QR scanner
 

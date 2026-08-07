@@ -23,15 +23,15 @@ const db = require('../db');
  * @param {number|null} [scopeContext.busModelId] - Bus model ID reference
  * @returns {object|undefined} The resolved active threshold record row
  */
-function resolveThreshold(parameterType, { depotId, busModelId } = {}) {
+async function resolveThreshold(parameterType, { depotId, busModelId } = {}) {
   if (parameterType === 'NSD' && depotId) {
-    const override = db
+    const override = await db
       .prepare(`SELECT * FROM thresholds WHERE parameter_type = 'NSD' AND scope_type = 'DEPOT' AND scope_id = ? AND is_active = 1`)
       .get(depotId);
     if (override) return override;
   }
   if (parameterType === 'PRESSURE' && busModelId) {
-    const override = db
+    const override = await db
       .prepare(`SELECT * FROM thresholds WHERE parameter_type = 'PRESSURE' AND scope_type = 'BUS_MODEL' AND scope_id = ? AND is_active = 1`)
       .get(busModelId);
     if (override) return override;

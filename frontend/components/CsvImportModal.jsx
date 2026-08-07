@@ -73,8 +73,9 @@ export default function CsvImportModal({ entity, title, columns, onClose, onImpo
     downloadCsv(`${entity}_template.csv`, buildTemplateCsv(columns));
   }
 
-  const required = columns.filter((c) => c.required).map((c) => c.key);
-  const optional = columns.filter((c) => !c.required).map((c) => c.key);
+  const describeColumn = (c) => (c.hint ? `${c.key} (${c.hint})` : c.key);
+  const required = columns.filter((c) => c.required).map(describeColumn);
+  const optional = columns.filter((c) => !c.required).map(describeColumn);
 
   // Success (green): every row imported. Warning (yellow): a mix of
   // successes and failures. Error (red): every row failed.

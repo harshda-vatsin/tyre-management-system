@@ -9,16 +9,19 @@
 const bcrypt = require('bcrypt');
 const db = require('./db');
 const { getPositionLayout } = require('./utils/busLayout');
+const { DEFAULT_GLOBAL_THRESHOLDS } = require('./utils/defaultThresholds');
 
 const DEV_PASSWORD = 'Passw0rd!';
 
-function clearAll() {
+async function clearAll() {
   const tables = ['audit_log', 'alerts', 'tyre_events', 'tyres', 'buses', 'bus_models', 'thresholds', 'users', 'depots'];
-  for (const t of tables) db.prepare(`DELETE FROM ${t}`).run();
-  for (const t of tables) db.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(t);
+  // TRUNCATE ... RESTART IDENTITY CASCADE replaces both the per-table DELETE
+  // and the SQLite sqlite_sequence reset in one step -- CASCADE handles the
+  // FK dependencies between these tables so table order doesn't matter here.
+  await db.exec(`TRUNCATE TABLE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
 }
 
-function seed() {
+async function seed() {
   const insertDepot = db.prepare(`
     INSERT INTO depots (name, code, region, address) VALUES (@name, @code, @region, @address)
   `);
@@ -43,8 +46,8 @@ function seed() {
     VALUES (@parameter_type, @scope_type, @scope_id, @warning_min, @warning_max, @critical_min, @critical_max, @unit, @updated_by)
   `);
 
-  const runSeed = db.transaction(() => {
-    clearAll();
+  const runSeed = db.transaction(async () => {
+    await clearAll();
 
     const depots = [
       { name: 'Delhi Central Depot', code: 'DEL-C', region: 'North', address: 'Sector 18, Rohini, New Delhi' },
@@ -53,7 +56,7 @@ function seed() {
     ];
     const depotIds = {};
     for (const d of depots) {
-      const info = insertDepot.run(d);
+      const info = await insertDepot.run(d);
       depotIds[d.code] = info.lastInsertRowid;
     }
 
@@ -69,7 +72,7 @@ function seed() {
     ];
     const userIds = {};
     for (const u of users) {
-      const info = insertUser.run({ ...u, password_hash: passwordHash });
+      const info = await insertUser.run({ ...u, password_hash: passwordHash });
       userIds[u.username] = info.lastInsertRowid;
     }
 
@@ -95,7 +98,7 @@ function seed() {
     const busModelIds = {};
     const busModelPositions = {};
     for (const m of busModels) {
-      const info = insertBusModel.run(m);
+      const info = await insertBusModel.run(m);
       busModelIds[m.name] = info.lastInsertRowid;
       busModelPositions[m.name] = JSON.parse(m.position_labels_json);
     }
@@ -111,7 +114,7 @@ function seed() {
     const busIds = {};
     const busModelIdToName = Object.fromEntries(Object.entries(busModelIds).map(([n, id]) => [id, n]));
     for (const b of buses) {
-      const info = insertBus.run(b);
+      const info = await insertBus.run(b);
       busIds[b.registration_no] = info.lastInsertRowid;
     }
 
@@ -185,15 +188,9 @@ function seed() {
       current_depot_id: depotIds['MUM-W'],
     });
 
-    for (const t of tyres) insertTyre.run(t);
+    for (const t of tyres) await insertTyre.run(t);
 
-    const thresholds = [
-      { parameter_type: 'NSD', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 4, critical_min: null, critical_max: 2, unit: 'mm' },
-      { parameter_type: 'PRESSURE', scope_type: 'GLOBAL', scope_id: null, warning_min: 90, warning_max: 120, critical_min: 80, critical_max: 130, unit: 'psi' },
-      { parameter_type: 'INSPECTION_INTERVAL', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 7, critical_min: null, critical_max: 14, unit: 'days' },
-      { parameter_type: 'ESCALATION_DAYS', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 3, critical_min: null, critical_max: null, unit: 'days' },
-    ];
-    for (const t of thresholds) insertThreshold.run({ ...t, updated_by: userIds['admin'] });
+    for (const t of DEFAULT_GLOBAL_THRESHOLDS) await insertThreshold.run({ ...t, updated_by: userIds['admin'] });
 
     return {
       depots: depots.length,
@@ -201,16 +198,25 @@ function seed() {
       busModels: busModels.length,
       buses: buses.length,
       tyres: tyres.length,
-      thresholds: thresholds.length,
+      thresholds: DEFAULT_GLOBAL_THRESHOLDS.length,
     };
   });
 
-  // Execute the transaction in SQLite
-  const summary = runSeed();
+  const summary = await runSeed();
   console.log('Seed complete:', summary);
   console.log(`All seeded users share the password: ${DEV_PASSWORD}`);
   console.log('Usernames:', ['admin', 'nfm', 'dm_del', 'dm_mum', 'ts_del', 'ts_mum', 'auditor'].join(', '));
 }
 
 // Run seed execution immediately when executing the script
-seed();
+(async () => {
+  await db.ready;
+  try {
+    await seed();
+  } finally {
+    await db.close();
+  }
+})().catch((err) => {
+  console.error('Seed failed:', err);
+  process.exit(1);
+});

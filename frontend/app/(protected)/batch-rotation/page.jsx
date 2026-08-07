@@ -254,7 +254,7 @@ export default function BatchRotationPage() {
                 <input
                   value={tyreSearch}
                   onChange={(e) => setTyreSearch(e.target.value)}
-                  placeholder="e.g. RL-O or TYR-0003"
+                  placeholder="e.g. RLO or TYR-0003"
                   style={{ paddingLeft: '2rem' }}
                 />
               </div>
