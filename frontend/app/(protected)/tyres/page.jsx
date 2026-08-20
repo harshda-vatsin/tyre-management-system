@@ -328,7 +328,7 @@ export default function TyresPage() {
             <div className="field">
               <label>Initial NSD</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" value={form.initial_nsd} onChange={(e) => setForm({ ...form, initial_nsd: e.target.value })} />
+                <input type="number" step="0.01" value={form.initial_nsd} onChange={(e) => setForm({ ...form, initial_nsd: e.target.value })} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>

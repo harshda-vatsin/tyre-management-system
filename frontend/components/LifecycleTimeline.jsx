@@ -45,7 +45,9 @@ export default function LifecycleTimeline({
               <div className="lifecycle-timeline-desc">{describeEvent(e, pressureUnit, formatPressure)}</div>
               <div className="lifecycle-timeline-meta">
                 {e.performed_by_name ? `By ${e.performed_by_name}` : 'By system'}
-                {e.bus_registration_no ? ` · ${e.bus_registration_no}${e.position ? `/${e.position}` : ''}` : ''}
+                {e.bus_registration_no && (
+                  <> &middot; <strong>Bus:</strong> {e.bus_registration_no}{e.position ? ` / ${e.position}` : ''}</>
+                )}
               </div>
               <div className="lifecycle-timeline-actions">
                 {isCorrected && (

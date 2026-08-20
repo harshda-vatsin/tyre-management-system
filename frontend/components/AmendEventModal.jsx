@@ -74,7 +74,7 @@ export default function AmendEventModal({ event, eventTypeLabel, onClose, onSave
           <div className="field" key={key}>
             <label>{FIELD_LABELS[key]}</label>
             <div className="input-suffix-wrap">
-              <input type="number" step="0.1" value={values[key]} onChange={(e) => set(key, e.target.value)} required />
+              <input type="number" step="0.01" value={values[key]} onChange={(e) => set(key, e.target.value)} required />
               <span className="input-suffix">mm</span>
             </div>
           </div>

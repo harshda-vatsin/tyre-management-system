@@ -17,7 +17,8 @@ const WRITE_ROLES = [ROLES.ADMIN];
 const ALLOWED_SCOPES = {
   NSD: ['GLOBAL', 'DEPOT'],
   PRESSURE: ['GLOBAL', 'BUS_MODEL'],
-  INSPECTION_INTERVAL: ['GLOBAL'],
+  NSD_INSPECTION_INTERVAL: ['GLOBAL'],
+  PRESSURE_INSPECTION_INTERVAL: ['GLOBAL'],
   ESCALATION_DAYS: ['GLOBAL'],
   ROTATION_INTERVAL: ['GLOBAL'],
   ROTATION_INTERVAL_KM: ['GLOBAL'],
@@ -34,7 +35,8 @@ const ALLOWED_SCOPES = {
 const REQUIRED_FIELDS = {
   NSD: { warning: ['warning_max'], critical: ['critical_max'] },
   PRESSURE: { warning: ['warning_min', 'warning_max'], critical: ['critical_min', 'critical_max'] },
-  INSPECTION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
+  NSD_INSPECTION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
+  PRESSURE_INSPECTION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
   ESCALATION_DAYS: { warning: ['warning_max'], critical: [] },
   ROTATION_INTERVAL: { warning: ['warning_max'], critical: ['critical_max'] },
   ROTATION_INTERVAL_KM: { warning: ['warning_max'], critical: ['critical_max'] },

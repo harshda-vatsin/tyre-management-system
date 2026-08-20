@@ -360,7 +360,7 @@ const ready = (async () => {
     CREATE TABLE IF NOT EXISTS thresholds (
       id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parameter_type TEXT NOT NULL CHECK (parameter_type IN (
-        'NSD', 'PRESSURE', 'INSPECTION_INTERVAL', 'ESCALATION_DAYS', 'ROTATION_INTERVAL',
+        'NSD', 'PRESSURE', 'NSD_INSPECTION_INTERVAL', 'PRESSURE_INSPECTION_INTERVAL', 'ESCALATION_DAYS', 'ROTATION_INTERVAL',
         'ROTATION_INTERVAL_KM', 'TOE', 'CASTER', 'CAMBER', 'SAI'
       )),
       scope_type TEXT NOT NULL DEFAULT 'GLOBAL' CHECK (scope_type IN ('GLOBAL', 'DEPOT', 'BUS_MODEL')),
@@ -409,7 +409,7 @@ const ready = (async () => {
       tyre_id INTEGER NOT NULL REFERENCES tyres(id),
       bus_id INTEGER REFERENCES buses(id),
       depot_id INTEGER REFERENCES depots(id),
-      parameter_type TEXT NOT NULL CHECK (parameter_type IN ('NSD', 'PRESSURE', 'INSPECTION', 'ROTATION')),
+      parameter_type TEXT NOT NULL CHECK (parameter_type IN ('NSD', 'PRESSURE', 'NSD_INSPECTION', 'PRESSURE_INSPECTION', 'ROTATION')),
       severity TEXT NOT NULL CHECK (severity IN ('Warning', 'Critical')),
       status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Acknowledged', 'Resolved')),
       triggering_event_id INTEGER REFERENCES tyre_events(id),
@@ -446,7 +446,22 @@ const ready = (async () => {
       created_at TEXT NOT NULL DEFAULT ${NOW}
     );
 
+    CREATE TABLE IF NOT EXISTS access_logs (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      username TEXT,
+      role TEXT,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      status_code INTEGER,
+      response_time_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+
     CREATE INDEX IF NOT EXISTS idx_buses_depot ON buses(depot_id);
+    CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_buses_model ON buses(bus_model_id);
     CREATE INDEX IF NOT EXISTS idx_buses_package ON buses(package_id);
     CREATE INDEX IF NOT EXISTS idx_tyres_bus ON tyres(current_bus_id);

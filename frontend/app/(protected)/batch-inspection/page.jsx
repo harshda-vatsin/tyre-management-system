@@ -349,7 +349,7 @@ export default function BatchInspectionPage() {
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
                 <input
-                  type="number" step="0.1" min="0" max="25" autoFocus
+                  type="number" step="0.01" min="0" max="25" autoFocus
                   value={modalNsd}
                   onChange={(e) => setModalNsd(e.target.value)}
                   style={nsdFlag === 'CRITICAL' ? { borderColor: 'var(--danger)' } : nsdFlag === 'WARNING' ? { borderColor: 'var(--warning)' } : undefined}
@@ -369,7 +369,7 @@ export default function BatchInspectionPage() {
                 {['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].map((key, i) => (
                   <input
                     key={key}
-                    type="number" step="0.1" min="0" max="25"
+                    type="number" step="0.01" min="0" max="25"
                     placeholder={`G${i + 1}`}
                     value={modalGrooves[key]}
                     onChange={(e) => setModalGrooves((g) => ({ ...g, [key]: e.target.value }))}

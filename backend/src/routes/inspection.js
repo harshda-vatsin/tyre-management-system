@@ -17,7 +17,8 @@ router.get('/', asyncHandler(async (req, res) => {
   const { status, depot_id, bus_id, search, page = '1', pageSize = '20' } = req.query;
 
   const scopeDepotId = isDepotScoped(req.user) ? req.user.depot_id : (depot_id ? Number(depot_id) : undefined);
-  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const nsdThreshold = await resolveThreshold('NSD_INSPECTION_INTERVAL', {});
+  const pressureThreshold = await resolveThreshold('PRESSURE_INSPECTION_INTERVAL', {});
 
   let tyres = await listInServiceTyresWithLastReading(scopeDepotId);
 
@@ -40,7 +41,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const depotById = Object.fromEntries(depots.map((d) => [d.id, d]));
 
   let results = tyres.map((tyre) => {
-    const compliance = computeInspectionCompliance(tyre, tyre.last_reading_date, threshold);
+    const compliance = computeInspectionCompliance(tyre, tyre.last_nsd_date, tyre.last_pressure_date, nsdThreshold, pressureThreshold);
     return {
       tyre_id: tyre.id,
       tyre_number: tyre.tyre_number,
@@ -49,15 +50,17 @@ router.get('/', asyncHandler(async (req, res) => {
       bus_registration_no: tyre.current_bus_id ? busById[tyre.current_bus_id]?.registration_no : null,
       current_depot_id: tyre.current_depot_id,
       depot_name: tyre.current_depot_id ? depotById[tyre.current_depot_id]?.name : null,
-      last_reading_date: compliance.lastReadingDate,
-      days_since_last_reading: compliance.daysSinceLastReading,
+      last_nsd_date: compliance.lastNsdDate,
+      days_since_last_nsd: compliance.daysSinceLastNsd,
+      last_pressure_date: compliance.lastPressureDate,
+      days_since_last_pressure: compliance.daysSinceLastPressure,
       inspection_status: compliance.status,
     };
   });
 
   if (status) results = results.filter((r) => r.inspection_status === status);
 
-  results.sort((a, b) => b.days_since_last_reading - a.days_since_last_reading);
+  results.sort((a, b) => Math.max(b.days_since_last_nsd, b.days_since_last_pressure) - Math.max(a.days_since_last_nsd, a.days_since_last_pressure));
 
   const total = results.length;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -65,7 +68,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const offset = (pageNum - 1) * size;
   const data = results.slice(offset, offset + size);
 
-  res.json({ data, total, page: pageNum, pageSize: size, threshold: threshold ? { warning_max: threshold.warning_max, critical_max: threshold.critical_max, unit: threshold.unit } : null });
+  res.json({ data, total, page: pageNum, pageSize: size, nsdThreshold: nsdThreshold ? { warning_max: nsdThreshold.warning_max, critical_max: nsdThreshold.critical_max, unit: nsdThreshold.unit } : null, pressureThreshold: pressureThreshold ? { warning_max: pressureThreshold.warning_max, critical_max: pressureThreshold.critical_max, unit: pressureThreshold.unit } : null });
 }));
 
 module.exports = router;

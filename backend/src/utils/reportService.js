@@ -395,10 +395,15 @@ async function tyreLifeReport(filters) {
 // milestones -- one definition of "overdue" in the whole system.
 async function inspectionComplianceReport(filters) {
   const { depot_id, days_overdue } = filters;
-  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
-  const effectiveThreshold = days_overdue
-    ? { ...threshold, critical_max: Number(days_overdue) }
-    : threshold;
+  const nsdThreshold = await resolveThreshold('NSD_INSPECTION_INTERVAL', {});
+  const pressureThreshold = await resolveThreshold('PRESSURE_INSPECTION_INTERVAL', {});
+
+  const effectiveNsdThreshold = days_overdue
+    ? { ...nsdThreshold, critical_max: Number(days_overdue) }
+    : nsdThreshold;
+  const effectivePressureThreshold = days_overdue
+    ? { ...pressureThreshold, critical_max: Number(days_overdue) }
+    : pressureThreshold;
 
   const tyres = await listInServiceTyresWithLastReading(depot_id);
   const buses = await db.prepare('SELECT id, registration_no FROM buses').all();
@@ -407,15 +412,17 @@ async function inspectionComplianceReport(filters) {
   const depotById = Object.fromEntries(depots.map((d) => [d.id, d.name]));
 
   return tyres
-    .map((t) => ({ tyre: t, compliance: computeInspectionCompliance(t, t.last_reading_date, effectiveThreshold) }))
+    .map((t) => ({ tyre: t, compliance: computeInspectionCompliance(t, t.last_nsd_date, t.last_pressure_date, effectiveNsdThreshold, effectivePressureThreshold) }))
     .filter((x) => x.compliance.status === 'Overdue')
-    .sort((a, b) => b.compliance.daysSinceLastReading - a.compliance.daysSinceLastReading)
+    .sort((a, b) => Math.max(b.compliance.daysSinceLastNsd, b.compliance.daysSinceLastPressure) - Math.max(a.compliance.daysSinceLastNsd, a.compliance.daysSinceLastPressure))
     .map((x) => ({
       tyre_number: x.tyre.tyre_number,
       bus_registration_no: x.tyre.current_bus_id ? busById[x.tyre.current_bus_id] : null,
       depot_name: x.tyre.current_depot_id ? depotById[x.tyre.current_depot_id] : null,
-      last_reading_date: x.compliance.lastReadingDate,
-      days_since_last_reading: x.compliance.daysSinceLastReading,
+      last_nsd_date: x.compliance.lastNsdDate,
+      days_since_last_nsd: x.compliance.daysSinceLastNsd,
+      last_pressure_date: x.compliance.lastPressureDate,
+      days_since_last_pressure: x.compliance.daysSinceLastPressure,
       status: x.compliance.status,
     }));
 }
@@ -757,8 +764,10 @@ const REPORTS = {
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'bus_registration_no', label: 'Bus' },
       { key: 'depot_name', label: 'Depot' },
-      { key: 'last_reading_date', label: 'Last Reading Date' },
-      { key: 'days_since_last_reading', label: 'Days Since Last Reading' },
+      { key: 'last_nsd_date', label: 'Last NSD Date' },
+      { key: 'days_since_last_nsd', label: 'Days Since Last NSD' },
+      { key: 'last_pressure_date', label: 'Last Pressure Date' },
+      { key: 'days_since_last_pressure', label: 'Days Since Last Pressure' },
       { key: 'status', label: 'Compliance Status' },
     ],
     getRows: inspectionComplianceReport,

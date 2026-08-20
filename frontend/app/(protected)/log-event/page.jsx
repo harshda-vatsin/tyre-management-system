@@ -54,7 +54,7 @@ export default function LogEventPage() {
     if (tyre?.current_bus_id && eventType === 'inter_bus_transfer') {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data.filter((b) => b.id !== tyre.current_bus_id)));
     }
-    if (eventType === 'fitment_created') {
+    if (['fitment_created', 'puncture_repair'].includes(eventType)) {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data));
     }
   }, [tyre, eventType]);
@@ -119,7 +119,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>NSD Value{groovesFilled ? ' (auto: min of grooves below)' : ''}</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required={!groovesFilled} />
+                <input type="number" step="0.01" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required={!groovesFilled} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -129,7 +129,7 @@ export default function LogEventPage() {
                 {['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].map((key, i) => (
                   <div className="input-suffix-wrap" key={key}>
                     <input
-                      type="number" step="0.1" min="0" max="25"
+                      type="number" step="0.01" min="0" max="25"
                       placeholder={`G${i + 1}`}
                       value={fields[key] || ''}
                       onChange={(e) => set(key, e.target.value)}
@@ -169,7 +169,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -200,7 +200,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -250,6 +250,26 @@ export default function LogEventPage() {
               <label>Notes</label>
               <input value={fields.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="e.g. nail in tread" />
             </div>
+            <div className="form-section-title" style={{ marginTop: '0.5rem' }}>Remount (optional)</div>
+            <span className="field-hint" style={{ display: 'block', marginBottom: '0.5rem' }}>
+              A repaired tyre often goes back onto a different bus than the one it came off. Leave blank to just return it to store.
+            </span>
+            <div className="field">
+              <label>Bus</label>
+              <select value={fields.bus_id || ''} onChange={(e) => set('bus_id', e.target.value)}>
+                <option value="">Return to store (no remount)</option>
+                {destBuses.map((b) => <option key={b.id} value={b.id}>{b.registration_no} ({b.depot_name})</option>)}
+              </select>
+            </div>
+            {fields.bus_id && (
+              <div className="field">
+                <label>Position</label>
+                <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
+                  <option value="">Select position</option>
+                  {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+            )}
           </>
         );
       case 'inter_bus_transfer':
@@ -281,7 +301,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>Current NSD</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -301,7 +321,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>NSD at Condemnation</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -492,7 +512,7 @@ export default function LogEventPage() {
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -560,8 +580,15 @@ export default function LogEventPage() {
                 </div>
                 <span className={`badge ${statusBadgeClass(tyre.status)}`}>{tyre.status}</span>
               </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
-                {tyre.bus_registration_no ? `Mounted on ${tyre.bus_registration_no} / ${tyre.current_position}` : `In depot: ${tyre.depot_name || '-'}`}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: '0.4rem' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Bus</span>
+                {tyre.bus_registration_no ? (
+                  <span style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+                    {tyre.bus_registration_no} <span style={{ fontWeight: 400, color: 'var(--text-secondary)' }}>/ {tyre.current_position}</span>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Not mounted — in depot: {tyre.depot_name || '-'}</span>
+                )}
               </div>
             </div>
           )}

@@ -330,7 +330,7 @@ export default function BatchRotationPage() {
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={modalNsd} onChange={(e) => setModalNsd(e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={modalNsd} onChange={(e) => setModalNsd(e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>

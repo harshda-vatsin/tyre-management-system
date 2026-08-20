@@ -15,6 +15,8 @@ import { EVENT_TYPE_LABELS } from '../lib/tyreLifecycle.js';
 export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) {
   const [fields, setFields] = useState({});
   const [busPositions, setBusPositions] = useState([]);
+  const [destBuses, setDestBuses] = useState([]);
+  const [destPositions, setDestPositions] = useState([]);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -22,7 +24,18 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
     if (eventType === 'rotation' && tyre.current_bus_id) {
       api.get(`/buses/${tyre.current_bus_id}`).then((b) => setBusPositions(b.position_labels || []));
     }
+    if (eventType === 'puncture_repair') {
+      api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data));
+    }
   }, [eventType, tyre.current_bus_id]);
+
+  useEffect(() => {
+    if (fields.bus_id) {
+      api.get(`/buses/${fields.bus_id}`).then((b) => setDestPositions(b.position_labels || []));
+    } else {
+      setDestPositions([]);
+    }
+  }, [fields.bus_id]);
 
   function set(key, value) {
     setFields((f) => ({ ...f, [key]: value }));
@@ -57,7 +70,7 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -73,7 +86,7 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>
@@ -123,6 +136,26 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
               <label>Notes</label>
               <input value={fields.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="e.g. nail in tread" />
             </div>
+            <div className="form-section-title" style={{ marginTop: '0.5rem' }}>Remount (optional)</div>
+            <span className="field-hint" style={{ display: 'block', marginBottom: '0.5rem' }}>
+              A repaired tyre often goes back onto a different bus than the one it came off. Leave blank to just return it to store.
+            </span>
+            <div className="field">
+              <label>Bus</label>
+              <select value={fields.bus_id || ''} onChange={(e) => set('bus_id', e.target.value)}>
+                <option value="">Return to store (no remount)</option>
+                {destBuses.map((b) => <option key={b.id} value={b.id}>{b.registration_no} ({b.depot_name})</option>)}
+              </select>
+            </div>
+            {fields.bus_id && (
+              <div className="field">
+                <label>Position</label>
+                <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
+                  <option value="">Select position</option>
+                  {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+            )}
           </>
         );
       case 'retread_sent':
@@ -265,7 +298,7 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
-                <input type="number" step="0.1" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
                 <span className="input-suffix">mm</span>
               </div>
             </div>

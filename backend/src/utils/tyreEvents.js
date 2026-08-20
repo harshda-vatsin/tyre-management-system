@@ -416,22 +416,39 @@ async function createReplacement(user, { tyre_id, new_tyre_id, reason, odometer_
 // what was actually done (repair_type/cost/notes) and returns the tyre to
 // In Store (a status only ever answers "where is the tyre now"; the record
 // of what happened lives here, in the timeline, not in the status value).
-// From In Store it can be re-fitted via fitment_created same as any other
-// stored tyre.
-async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date }) {
+// A repaired tyre is very often remounted on a *different* bus than the one
+// it came off, not necessarily the one from the matching send_to_repair --
+// so bus_id/position here are an optional immediate remount, not an echo of
+// from_bus_id. Left blank, the tyre lands In Store exactly as before, free
+// to be fitted later via fitment_created same as any other stored tyre.
+async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date, bus_id, position }) {
   const tyre = await getTyre(tyre_id);
   if (!['plug', 'patch', 'tube'].includes(repair_type)) {
     throw new ApiError(400, 'repair_type must be one of: plug, patch, tube');
   }
   assertDepotScope(user, tyre.current_depot_id);
 
+  let remountBus = null;
+  if (bus_id) {
+    if (!position) throw new ApiError(400, 'position is required to remount onto a bus');
+    remountBus = await getBus(bus_id);
+    assertDepotScope(user, remountBus.depot_id);
+    const positions = await getBusModelPositions(remountBus.bus_model_id);
+    if (!positions.includes(position)) {
+      throw new ApiError(400, `position must be one of: ${positions.join(', ')}`);
+    }
+    await assertPositionFree(remountBus.id, position, tyre.id);
+  } else if (position) {
+    throw new ApiError(400, 'bus_id is required to remount onto a bus');
+  }
+
   const event = await insertEventRow({
     tyre_id: tyre.id,
     event_type: 'puncture_repair',
     event_date: event_date || undefined,
-    bus_id: tyre.current_bus_id,
-    position: tyre.current_position,
-    depot_id: tyre.current_depot_id,
+    bus_id: remountBus ? remountBus.id : tyre.current_bus_id,
+    position: remountBus ? position : tyre.current_position,
+    depot_id: remountBus ? remountBus.depot_id : tyre.current_depot_id,
     repair_type,
     repair_cost: repair_cost ?? null,
     supervisor_name,
@@ -442,10 +459,17 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
     performed_by: user.id,
   });
 
-  const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null });
+  const { before, after } = remountBus
+    ? await transitionTyreStatus(tyre.id, 'Active', {
+        current_bus_id: remountBus.id,
+        current_position: position,
+        current_depot_id: remountBus.depot_id,
+        current_package_id: remountBus.package_id,
+      })
+    : await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
-  await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
+  await maybeUpdateBusOdometer(remountBus ? remountBus.id : before.current_bus_id, odometer_km);
   return [event];
 }
 

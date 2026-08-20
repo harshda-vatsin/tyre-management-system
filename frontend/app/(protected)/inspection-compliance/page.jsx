@@ -27,7 +27,8 @@ export default function InspectionCompliancePage() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [threshold, setThreshold] = useState(null);
+  const [nsdThreshold, setNsdThreshold] = useState(null);
+  const [pressureThreshold, setPressureThreshold] = useState(null);
   const pageSize = 10;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -48,7 +49,8 @@ export default function InspectionCompliancePage() {
       const data = await api.get(`/inspection-compliance?${params.toString()}`);
       setRows(data.data);
       setTotal(data.total);
-      setThreshold(data.threshold);
+      setNsdThreshold(data.nsdThreshold);
+      setPressureThreshold(data.pressureThreshold);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -89,7 +91,7 @@ export default function InspectionCompliancePage() {
     <div>
       <PageHeader
         title="Inspection Compliance"
-        description={threshold ? `Due at ${threshold.warning_max} days since last reading, Overdue at ${threshold.critical_max} days (global inspection interval).` : undefined}
+        description={`NSD Interval: ${nsdThreshold ? nsdThreshold.warning_max : '?'} days warning, ${nsdThreshold ? nsdThreshold.critical_max : '?'} days critical. Pressure Interval: ${pressureThreshold ? pressureThreshold.warning_max : '?'} days warning, ${pressureThreshold ? pressureThreshold.critical_max : '?'} days critical.`}
       />
 
       {summary && (
@@ -128,8 +130,10 @@ export default function InspectionCompliancePage() {
                     <th>Brand</th>
                     <th>Bus</th>
                     <th>Depot</th>
-                    <th>Last Reading</th>
-                    <th>Days Since</th>
+                    <th>Last NSD</th>
+                    <th>Days (NSD)</th>
+                    <th>Last Pressure</th>
+                    <th>Days (Pressure)</th>
                     <th>Compliance</th>
                   </tr>
                 </thead>
@@ -140,8 +144,10 @@ export default function InspectionCompliancePage() {
                       <td>{r.brand}</td>
                       <td>{r.bus_registration_no ? <Link href={`/buses/${r.current_bus_id}`}>{r.bus_registration_no}</Link> : '-' }</td>
                       <td>{r.depot_name || '-'}</td>
-                      <td>{r.last_reading_date || 'Never'}</td>
-                      <td>{r.days_since_last_reading}d</td>
+                      <td>{r.last_nsd_date || 'Never'}</td>
+                      <td>{r.days_since_last_nsd}d</td>
+                      <td>{r.last_pressure_date || 'Never'}</td>
+                      <td>{r.days_since_last_pressure}d</td>
                       <td><span className={`badge ${STATUS_BADGE_CLASS[r.inspection_status]}`}>{r.inspection_status}</span></td>
                     </tr>
                   ))}

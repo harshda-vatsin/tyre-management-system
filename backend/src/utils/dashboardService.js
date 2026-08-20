@@ -62,12 +62,13 @@ async function getActiveAlertCounts(depotId) {
  * @returns {Promise<{due: number, overdue: number}>} Counts of affected tyres
  */
 async function getInspectionCounts(depotId) {
-  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const nsdThreshold = await resolveThreshold('NSD_INSPECTION_INTERVAL', {});
+  const pressureThreshold = await resolveThreshold('PRESSURE_INSPECTION_INTERVAL', {});
   const tyres = await listInServiceTyresWithLastReading(depotId);
   let due = 0;
   let overdue = 0;
   for (const t of tyres) {
-    const { status } = computeInspectionCompliance(t, t.last_reading_date, threshold);
+    const { status } = computeInspectionCompliance(t, t.last_nsd_date, t.last_pressure_date, nsdThreshold, pressureThreshold);
     if (status === 'Due') due += 1;
     else if (status === 'Overdue') overdue += 1;
   }
@@ -119,7 +120,8 @@ async function getAlertCountsByParameter(depotId) {
   const counts = {
     NSD: { Warning: 0, Critical: 0 },
     PRESSURE: { Warning: 0, Critical: 0 },
-    INSPECTION: { Warning: 0, Critical: 0 },
+    NSD_INSPECTION: { Warning: 0, Critical: 0 },
+    PRESSURE_INSPECTION: { Warning: 0, Critical: 0 },
     ROTATION: { Warning: 0, Critical: 0 },
   };
   for (const r of rows) {
@@ -203,12 +205,13 @@ function getTopFlaggedBuses(depotId, limit = 10) {
  * @returns {Promise<Map<number, string[]>>} Map mapping Bus ID to compliance status array
  */
 async function computeBusComplianceMap(depotId) {
-  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const nsdThreshold = await resolveThreshold('NSD_INSPECTION_INTERVAL', {});
+  const pressureThreshold = await resolveThreshold('PRESSURE_INSPECTION_INTERVAL', {});
   const tyres = await listInServiceTyresWithLastReading(depotId);
   const byBus = new Map();
   for (const t of tyres) {
     if (!t.current_bus_id) continue;
-    const { status } = computeInspectionCompliance(t, t.last_reading_date, threshold);
+    const { status } = computeInspectionCompliance(t, t.last_nsd_date, t.last_pressure_date, nsdThreshold, pressureThreshold);
     if (!byBus.has(t.current_bus_id)) byBus.set(t.current_bus_id, []);
     byBus.get(t.current_bus_id).push(status);
   }
@@ -346,23 +349,26 @@ function getTyresInStoreWithAge(depotId, limit = 50) {
  * @returns {Promise<Array<object>>} List of upcoming inspection items
  */
 async function getUpcomingInspections(depotId, limit = 50) {
-  const threshold = await resolveThreshold('INSPECTION_INTERVAL', {});
+  const nsdThreshold = await resolveThreshold('NSD_INSPECTION_INTERVAL', {});
+  const pressureThreshold = await resolveThreshold('PRESSURE_INSPECTION_INTERVAL', {});
   const tyres = await listInServiceTyresWithLastReading(depotId);
   const buses = await db.prepare('SELECT id, registration_no FROM buses').all();
   const busById = Object.fromEntries(buses.map((b) => [b.id, b.registration_no]));
 
   return tyres
-    .map((t) => ({ tyre: t, compliance: computeInspectionCompliance(t, t.last_reading_date, threshold) }))
+    .map((t) => ({ tyre: t, compliance: computeInspectionCompliance(t, t.last_nsd_date, t.last_pressure_date, nsdThreshold, pressureThreshold) }))
     .filter((x) => x.compliance.status === 'Due')
-    .sort((a, b) => b.compliance.daysSinceLastReading - a.compliance.daysSinceLastReading)
+    .sort((a, b) => Math.max(b.compliance.daysSinceLastNsd, b.compliance.daysSinceLastPressure) - Math.max(a.compliance.daysSinceLastNsd, a.compliance.daysSinceLastPressure))
     .slice(0, limit)
     .map((x) => ({
       tyre_id: x.tyre.id,
       tyre_number: x.tyre.tyre_number,
       current_bus_id: x.tyre.current_bus_id,
       bus_registration_no: x.tyre.current_bus_id ? busById[x.tyre.current_bus_id] : null,
-      days_since_last_reading: x.compliance.daysSinceLastReading,
-      last_reading_date: x.compliance.lastReadingDate,
+      days_since_last_nsd: x.compliance.daysSinceLastNsd,
+      days_since_last_pressure: x.compliance.daysSinceLastPressure,
+      last_nsd_date: x.compliance.lastNsdDate,
+      last_pressure_date: x.compliance.lastPressureDate,
     }));
 }
 

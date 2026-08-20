@@ -6,6 +6,7 @@
  * and default system threshold bounds) inside a database transaction block.
  */
 
+require('dotenv').config();
 const bcrypt = require('bcrypt');
 const db = require('./db');
 const { getPositionLayout } = require('./utils/busLayout');

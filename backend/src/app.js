@@ -38,6 +38,7 @@ const settingsRoutes = require('./routes/settings');
 const importRoutes = require('./routes/imports');
 const misImportRoutes = require('./routes/misImports');
 const { findStuckImportSessions } = require('./misImport/importSessionStore');
+const accessLogger = require('./middleware/accessLogger');
 
 const app = express();
 
@@ -45,6 +46,7 @@ const app = express();
 app.use(cors());
 // Parse incoming requests with JSON payloads
 app.use(express.json());
+app.use(accessLogger);
 
 // Public health check endpoint to verify backend operational status. Stays
 // a basic liveness signal first and foremost -- the stuck-import check

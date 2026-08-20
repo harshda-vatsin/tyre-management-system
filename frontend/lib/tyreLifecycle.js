@@ -118,7 +118,7 @@ export function describeEvent(e, pressureUnit, formatPressure) {
     case 'send_to_repair':
       return `Sent to repair${e.from_bus_registration_no ? ` (removed from ${e.from_bus_registration_no}/${e.from_position})` : ''}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'puncture_repair':
-      return `Repair completed: ${e.repair_type}${e.repair_cost != null ? ` (cost ${e.repair_cost})` : ''}${e.notes ? ` - ${e.notes}` : ''}`;
+      return `Repair completed: ${e.repair_type}${e.repair_cost != null ? ` (cost ${e.repair_cost})` : ''}${e.bus_registration_no ? `, remounted at ${e.position} on ${e.bus_registration_no}` : ', returned to store'}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'inter_bus_transfer':
       return `${e.from_bus_registration_no}/${e.from_position} → ${e.to_bus_registration_no}/${e.to_position}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'send_to_store':

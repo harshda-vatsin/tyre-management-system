@@ -13,7 +13,8 @@
 const DEFAULT_GLOBAL_THRESHOLDS = [
   { parameter_type: 'NSD', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 4, critical_min: null, critical_max: 2, unit: 'mm' },
   { parameter_type: 'PRESSURE', scope_type: 'GLOBAL', scope_id: null, warning_min: 90, warning_max: 120, critical_min: 80, critical_max: 130, unit: 'psi' },
-  { parameter_type: 'INSPECTION_INTERVAL', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 7, critical_min: null, critical_max: 14, unit: 'days' },
+  { parameter_type: 'NSD_INSPECTION_INTERVAL', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 12, critical_min: null, critical_max: 15, unit: 'days' },
+  { parameter_type: 'PRESSURE_INSPECTION_INTERVAL', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 25, critical_min: null, critical_max: 30, unit: 'days' },
   { parameter_type: 'ESCALATION_DAYS', scope_type: 'GLOBAL', scope_id: null, warning_min: null, warning_max: 3, critical_min: null, critical_max: null, unit: 'days' },
 ];
 

@@ -10,7 +10,8 @@
     "seed": "node src/seed.js",
     "seed:thresholds": "node src/seedThresholds.js",
     "backfill": "node src/migrations/backfillLifecycleEvents.js",
-    "test": "node --test"
+    "test": "node --test",
+    "check-activity": "node src/scripts/check-activity.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

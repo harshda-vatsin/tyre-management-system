@@ -21,6 +21,7 @@
  * of something to avoid.
  */
 
+require('dotenv').config();
 const { Client } = require('pg');
 const crypto = require('crypto');
 

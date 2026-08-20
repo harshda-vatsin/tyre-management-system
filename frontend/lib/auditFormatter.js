@@ -126,7 +126,7 @@ export function formatValue(field, value, contextObj = {}) {
     if (contextObj.parameter_type === 'PRESSURE' || field.includes('pressure')) {
       return `${value} PSI`;
     }
-    if (contextObj.parameter_type === 'INSPECTION_INTERVAL') {
+    if (contextObj.parameter_type && contextObj.parameter_type.endsWith('INSPECTION_INTERVAL')) {
       return `${value} Days`;
     }
     if (contextObj.parameter_type === 'ESCALATION_DAYS') {

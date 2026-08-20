@@ -14,7 +14,8 @@ import LoadingState from '../../../../components/LoadingState.jsx';
 const PARAMETER_INFO = {
   NSD: { label: 'NSD (Tread Depth)', unit: 'mm', usesMinMax: false, scopes: ['GLOBAL', 'DEPOT'] },
   PRESSURE: { label: 'Tyre Pressure', unit: 'psi', usesMinMax: true, scopes: ['GLOBAL', 'BUS_MODEL'] },
-  INSPECTION_INTERVAL: { label: 'Inspection Interval', unit: 'days', usesMinMax: false, scopes: ['GLOBAL'] },
+  NSD_INSPECTION_INTERVAL: { label: 'NSD Inspection Interval', unit: 'days', usesMinMax: false, scopes: ['GLOBAL'] },
+  PRESSURE_INSPECTION_INTERVAL: { label: 'Pressure Inspection Interval', unit: 'days', usesMinMax: false, scopes: ['GLOBAL'] },
   ESCALATION_DAYS: { label: 'Alert Escalation', unit: 'days', usesMinMax: false, scopes: ['GLOBAL'], noCritical: true },
 };
 
