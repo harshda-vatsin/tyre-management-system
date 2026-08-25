@@ -4,8 +4,10 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
-import { ROLES } from '../../../lib/roles.js';
+import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
 import TyreSelect from '../../../components/TyreSelect.jsx';
+import BusSelect from '../../../components/BusSelect.jsx';
+import BusTyreDiagram from '../../../components/BusTyreDiagram.jsx';
 import PageHeader from '../../../components/PageHeader.jsx';
 import { EVENT_TYPES as ALL_EVENT_TYPES, statusBadgeClass } from '../../../lib/tyreLifecycle.js';
 
@@ -15,6 +17,7 @@ export default function LogEventPage() {
   const { user } = useAuth();
   const canWrite = [ROLES.ADMIN, ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR].includes(user?.role);
   const canElevated = [ROLES.ADMIN, ROLES.DEPOT_MANAGER].includes(user?.role);
+  const isFleetWide = FLEET_WIDE_ROLES.includes(user?.role);
 
   const availableTypes = EVENT_TYPES.filter((t) => !t.elevated || canElevated);
 
@@ -27,8 +30,52 @@ export default function LogEventPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  // Replacement is looked up by Bus + position (click a wheel on the
+  // diagram) rather than the free-text tyre search every other event type
+  // uses -- picking the bus number first is how supervisors actually think
+  // about a replacement job, and it removes any doubt about which mounted
+  // tyre they're about to pull.
+  const [depots, setDepots] = useState([]);
+  const [repDepotId, setRepDepotId] = useState(user?.depot_id || '');
+  const [repBusId, setRepBusId] = useState('');
+  const [repBus, setRepBus] = useState(null);
+
+  // Rotation target-occupancy handling: see QuickActionModal.jsx for the
+  // identical pattern -- an occupied "To Position" always resolves via the
+  // occupant moving to a currently-empty position or going to Spare, never
+  // into the slot this tyre is itself vacating, so ordering never matters.
+  const [rotationBus, setRotationBus] = useState(null);
+  const [occupantMode, setOccupantMode] = useState('spare');
+  const [occupantTo, setOccupantTo] = useState('');
+  const [occupantNsd, setOccupantNsd] = useState('');
+  const [occupantStoredAt, setOccupantStoredAt] = useState('');
+
+  useEffect(() => {
+    api.get('/depots').then(setDepots).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isFleetWide && user?.depot_id) setRepDepotId(user.depot_id);
+  }, [isFleetWide, user?.depot_id]);
+
+  useEffect(() => {
+    setRepBusId('');
+    setRepBus(null);
+  }, [repDepotId]);
+
+  useEffect(() => {
+    setRepBus(null);
+    if (repBusId) {
+      api.get(`/buses/${repBusId}`).then(setRepBus).catch((err) => setError(err.message));
+    }
+  }, [repBusId]);
+
   useEffect(() => {
     setTyre(null);
+    if (eventType !== 'replacement') {
+      setRepBusId('');
+      setRepBus(null);
+    }
     if (eventType === 'nsd_reading') {
       // "Today" per IST, not the viewing browser's own local timezone --
       // the app's server-side timestamps are all IST-displayed, so the
@@ -47,9 +94,10 @@ export default function LogEventPage() {
 
   useEffect(() => {
     if (tyre?.current_bus_id && ['rotation'].includes(eventType)) {
-      api.get(`/buses/${tyre.current_bus_id}`).then((b) => setBusPositions(b.position_labels));
+      api.get(`/buses/${tyre.current_bus_id}`).then((b) => { setBusPositions(b.position_labels); setRotationBus(b); });
     } else {
       setBusPositions([]);
+      setRotationBus(null);
     }
     if (tyre?.current_bus_id && eventType === 'inter_bus_transfer') {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data.filter((b) => b.id !== tyre.current_bus_id)));
@@ -58,6 +106,17 @@ export default function LogEventPage() {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data));
     }
   }, [tyre, eventType]);
+
+  const rotationOccupant = (rotationBus?.tyre_position_map || []).find((s) => s.position === fields.to_position)?.tyre || null;
+  const rotationEmptyPositions = busPositions.filter((p) => p !== tyre?.current_position && !(rotationBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
+
+  useEffect(() => {
+    setOccupantMode('spare');
+    setOccupantTo('');
+    setOccupantNsd(rotationOccupant?.last_nsd_value != null ? String(rotationOccupant.last_nsd_value) : '');
+    setOccupantStoredAt(rotationBus?.depot_name ? `${rotationBus.depot_name} Store` : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.to_position]);
 
   useEffect(() => {
     const busId = fields.to_bus_id || fields.bus_id;
@@ -95,6 +154,19 @@ export default function LogEventPage() {
       }
     }
     try {
+      if (eventType === 'rotation' && rotationOccupant) {
+        if (occupantMode === 'spare') {
+          await api.post('/events', {
+            event_type: 'send_to_store',
+            tyre_id: rotationOccupant.id,
+            nsd_value: Number(occupantNsd),
+            stored_at: occupantStoredAt,
+            reason: `Bumped from ${fields.to_position} during rotation of ${tyre.tyre_number}`,
+          });
+        } else {
+          await api.post('/events', { event_type: 'rotation', tyre_id: rotationOccupant.id, to_position: occupantTo });
+        }
+      }
       const payload = { event_type: eventType, tyre_id: tyre.id, ...fields };
       const result = await api.post('/events', payload);
       const count = Array.isArray(result) ? result.length : 1;
@@ -163,9 +235,55 @@ export default function LogEventPage() {
               <label>To Position</label>
               <select value={fields.to_position || ''} onChange={(e) => set('to_position', e.target.value)} required disabled={!tyre}>
                 <option value="">{tyre ? 'Select position' : 'Select a mounted tyre first'}</option>
-                {busPositions.filter((p) => p !== tyre?.current_position).map((p) => <option key={p} value={p}>{p}</option>)}
+                {busPositions.filter((p) => p !== tyre?.current_position).map((p) => {
+                  const occ = (rotationBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre;
+                  return <option key={p} value={p}>{p}{occ ? ` (occupied by ${occ.tyre_number})` : ''}</option>;
+                })}
               </select>
             </div>
+            {rotationOccupant && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: '0.5rem 0' }}>
+                <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  <strong>{fields.to_position}</strong> is occupied by <strong>{rotationOccupant.tyre_number}</strong>. Choose what happens to it:
+                </div>
+                <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input type="radio" checked={occupantMode === 'spare'} onChange={() => setOccupantMode('spare')} /> Send to Spare
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input
+                      type="radio"
+                      checked={occupantMode === 'move'}
+                      onChange={() => setOccupantMode('move')}
+                      disabled={rotationEmptyPositions.length === 0}
+                    /> Move to an empty position
+                  </label>
+                </div>
+                {occupantMode === 'spare' ? (
+                  <>
+                    <div className="field">
+                      <label>{rotationOccupant.tyre_number} &mdash; Current NSD</label>
+                      <div className="input-suffix-wrap">
+                        <input type="number" step="0.01" min="0" max="25" value={occupantNsd} onChange={(e) => setOccupantNsd(e.target.value)} required />
+                        <span className="input-suffix">mm</span>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>{rotationOccupant.tyre_number} &mdash; Stored At</label>
+                      <input value={occupantStoredAt} onChange={(e) => setOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
+                    </div>
+                  </>
+                ) : (
+                  <div className="field">
+                    <label>{rotationOccupant.tyre_number} &mdash; New Position</label>
+                    <select value={occupantTo} onChange={(e) => setOccupantTo(e.target.value)} required>
+                      <option value="">Select position</option>
+                      {rotationEmptyPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
@@ -315,22 +433,6 @@ export default function LogEventPage() {
             </div>
           </>
         );
-      case 'condemnation':
-        return (
-          <>
-            <div className="field">
-              <label>NSD at Condemnation</label>
-              <div className="input-suffix-wrap">
-                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} required />
-                <span className="input-suffix">mm</span>
-              </div>
-            </div>
-            <div className="field">
-              <label>Reason</label>
-              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. below minimum NSD" required />
-            </div>
-          </>
-        );
       case 'fitment_created':
         return (
           <>
@@ -474,9 +576,16 @@ export default function LogEventPage() {
             </div>
           </>
         );
-      case 'scrap':
+      case 'condemnation':
         return (
           <>
+            <div className="field">
+              <label>NSD at Scrap</label>
+              <div className="input-suffix-wrap">
+                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
+                <span className="input-suffix">mm</span>
+              </div>
+            </div>
             <div className="field">
               <label>Scrap Value</label>
               <input type="number" step="0.01" value={fields.scrap_value || ''} onChange={(e) => set('scrap_value', e.target.value)} />
@@ -510,36 +619,12 @@ export default function LogEventPage() {
               <input value={fields.store_manager || ''} onChange={(e) => set('store_manager', e.target.value)} />
             </div>
             <div className="field">
-              <label>NSD Value</label>
-              <div className="input-suffix-wrap">
-                <input type="number" step="0.01" min="0" max="25" value={fields.nsd_value || ''} onChange={(e) => set('nsd_value', e.target.value)} />
-                <span className="input-suffix">mm</span>
-              </div>
-            </div>
-            <div className="field">
               <label>Odometer Reading (km)</label>
               <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
             </div>
             <div className="field">
               <label>Reason</label>
-              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. end of usable tread life" required />
-            </div>
-          </>
-        );
-      case 'scrap_disposal':
-        return (
-          <>
-            <div className="field">
-              <label>Milestone</label>
-              <select value={fields.milestone || ''} onChange={(e) => set('milestone', e.target.value)} required>
-                <option value="">Select</option>
-                <option value="Disposed">Disposed</option>
-                <option value="Archived">Archived</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Reason</label>
-              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. disposed per policy" />
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. below minimum NSD" required />
             </div>
           </>
         );
@@ -549,6 +634,29 @@ export default function LogEventPage() {
   }
 
   const needsMountedTyre = ['nsd_reading', 'pressure_reading', 'rotation', 'replacement', 'inter_bus_transfer', 'inspection_completed'].includes(eventType);
+
+  function renderReplacementSlot(slot) {
+    if (!slot.tyre) {
+      return (
+        <button type="button" key={slot.position} className="bus-diagram-tyre empty" disabled>
+          <span className="position-code">{slot.position}</span>
+          <span className="reading-summary">Empty</span>
+        </button>
+      );
+    }
+    const isSelected = tyre?.id === slot.tyre.id;
+    return (
+      <button
+        type="button"
+        key={slot.position}
+        className={`bus-diagram-tyre${isSelected ? ' has-reading' : ''}`}
+        onClick={() => api.get(`/tyres/${slot.tyre.id}`).then(setTyre).catch((err) => setError(err.message))}
+      >
+        <span className="position-code">{slot.position}</span>
+        <span className="tyre-number">{slot.tyre.tyre_number}</span>
+      </button>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 560, margin: '0 auto' }}>
@@ -564,12 +672,38 @@ export default function LogEventPage() {
 
         <form onSubmit={handleSubmit}>
           <div className="form-section-title">Tyre</div>
-          <TyreSelect
-            label={eventType === 'replacement' ? 'Tyre Being Replaced' : 'Tyre Number'}
-            mountedOnly={needsMountedTyre}
-            value={tyre?.id}
-            onChange={setTyre}
-          />
+          {eventType === 'replacement' ? (
+            <>
+              {isFleetWide && (
+                <div className="field">
+                  <label>Depot</label>
+                  <select value={repDepotId} onChange={(e) => setRepDepotId(e.target.value)}>
+                    <option value="">Select a depot</option>
+                    {depots.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <BusSelect value={repBusId} onChange={(b) => setRepBusId(b ? b.id : '')} depotId={repDepotId} />
+              {repBusId && !repBus && <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading bus...</p>}
+              {repBus && (
+                <>
+                  <BusTyreDiagram positionMap={repBus.tyre_position_map} renderTyre={renderReplacementSlot} />
+                  {repBus.tyre_position_map.every((s) => !s.tyre) && (
+                    <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '-0.5rem' }}>
+                      No tyres are mounted on this bus.
+                    </p>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            <TyreSelect
+              label="Tyre Number"
+              mountedOnly={needsMountedTyre}
+              value={tyre?.id}
+              onChange={setTyre}
+            />
+          )}
 
           {tyre && (
             <div className="card" style={{ background: 'var(--surface-muted)', boxShadow: 'none', border: '1px solid var(--border)', padding: '0.85rem 1rem' }}>

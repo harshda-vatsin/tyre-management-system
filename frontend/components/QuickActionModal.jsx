@@ -11,7 +11,9 @@ import { EVENT_TYPE_LABELS } from '../lib/tyreLifecycle.js';
 // already looking at one specific tyre (rotate it, pull it for repair, send
 // it for retread, resolve a retread, file/resolve a warranty claim, scrap
 // it). NSD/pressure readings, replacement, inter-bus transfer, and
-// send-to-store/condemnation remain on /log-event, unchanged.
+// send-to-store remain on /log-event, unchanged. The 'condemnation' case
+// below is labeled "Scrap" in the UI (see lib/tyreLifecycle.js) -- it
+// absorbed the old separate 'scrap' event type's paperwork fields.
 export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) {
   const [fields, setFields] = useState({});
   const [busPositions, setBusPositions] = useState([]);
@@ -20,9 +22,22 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Rotation target-occupancy handling: when the chosen "To Position" is
+  // already occupied, the occupant has to go somewhere before this rotation
+  // can be applied. Only a currently-empty position (never the slot this
+  // tyre itself is vacating) is offered as a "move" target, so this never
+  // needs the two-step move to resolve in a particular order -- moving/
+  // dismounting the occupant first always succeeds regardless of when the
+  // primary rotation below is applied.
+  const [bus, setBus] = useState(null);
+  const [occupantMode, setOccupantMode] = useState('spare');
+  const [occupantTo, setOccupantTo] = useState('');
+  const [occupantNsd, setOccupantNsd] = useState('');
+  const [occupantStoredAt, setOccupantStoredAt] = useState('');
+
   useEffect(() => {
     if (eventType === 'rotation' && tyre.current_bus_id) {
-      api.get(`/buses/${tyre.current_bus_id}`).then((b) => setBusPositions(b.position_labels || []));
+      api.get(`/buses/${tyre.current_bus_id}`).then((b) => { setBusPositions(b.position_labels || []); setBus(b); });
     }
     if (eventType === 'puncture_repair') {
       api.get('/buses?pageSize=100').then((r) => setDestBuses(r.data));
@@ -37,6 +52,17 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
     }
   }, [fields.bus_id]);
 
+  const occupant = (bus?.tyre_position_map || []).find((s) => s.position === fields.to_position)?.tyre || null;
+  const emptyPositions = busPositions.filter((p) => p !== tyre.current_position && !(bus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
+
+  useEffect(() => {
+    setOccupantMode('spare');
+    setOccupantTo('');
+    setOccupantNsd(occupant?.last_nsd_value != null ? String(occupant.last_nsd_value) : '');
+    setOccupantStoredAt(bus?.depot_name ? `${bus.depot_name} Store` : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.to_position]);
+
   function set(key, value) {
     setFields((f) => ({ ...f, [key]: value }));
   }
@@ -46,6 +72,19 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
     setError('');
     setSaving(true);
     try {
+      if (eventType === 'rotation' && occupant) {
+        if (occupantMode === 'spare') {
+          await api.post('/events', {
+            event_type: 'send_to_store',
+            tyre_id: occupant.id,
+            nsd_value: Number(occupantNsd),
+            stored_at: occupantStoredAt,
+            reason: `Bumped from ${fields.to_position} during rotation of ${tyre.tyre_number}`,
+          });
+        } else {
+          await api.post('/events', { event_type: 'rotation', tyre_id: occupant.id, to_position: occupantTo });
+        }
+      }
       await api.post('/events', { event_type: eventType, tyre_id: tyre.id, ...fields });
       onSaved();
     } catch (err) {
@@ -64,9 +103,55 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
               <label>To Position</label>
               <select value={fields.to_position || ''} onChange={(e) => set('to_position', e.target.value)} required>
                 <option value="">Select position</option>
-                {busPositions.filter((p) => p !== tyre.current_position).map((p) => <option key={p} value={p}>{p}</option>)}
+                {busPositions.filter((p) => p !== tyre.current_position).map((p) => {
+                  const occ = (bus?.tyre_position_map || []).find((s) => s.position === p)?.tyre;
+                  return <option key={p} value={p}>{p}{occ ? ` (occupied by ${occ.tyre_number})` : ''}</option>;
+                })}
               </select>
             </div>
+            {occupant && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: '0.5rem 0' }}>
+                <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  <strong>{fields.to_position}</strong> is occupied by <strong>{occupant.tyre_number}</strong>. Choose what happens to it:
+                </div>
+                <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input type="radio" checked={occupantMode === 'spare'} onChange={() => setOccupantMode('spare')} /> Send to Spare
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input
+                      type="radio"
+                      checked={occupantMode === 'move'}
+                      onChange={() => setOccupantMode('move')}
+                      disabled={emptyPositions.length === 0}
+                    /> Move to an empty position
+                  </label>
+                </div>
+                {occupantMode === 'spare' ? (
+                  <>
+                    <div className="field">
+                      <label>{occupant.tyre_number} &mdash; Current NSD</label>
+                      <div className="input-suffix-wrap">
+                        <input type="number" step="0.01" min="0" max="25" value={occupantNsd} onChange={(e) => setOccupantNsd(e.target.value)} required />
+                        <span className="input-suffix">mm</span>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>{occupant.tyre_number} &mdash; Stored At</label>
+                      <input value={occupantStoredAt} onChange={(e) => setOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
+                    </div>
+                  </>
+                ) : (
+                  <div className="field">
+                    <label>{occupant.tyre_number} &mdash; New Position</label>
+                    <select value={occupantTo} onChange={(e) => setOccupantTo(e.target.value)} required>
+                      <option value="">Select position</option>
+                      {emptyPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">
@@ -260,7 +345,7 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
             </div>
           </>
         );
-      case 'scrap':
+      case 'condemnation':
         return (
           <>
             <div className="field">

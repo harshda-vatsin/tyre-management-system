@@ -38,6 +38,11 @@ export default function BatchRotationPage() {
   const [busId, setBusId] = useState('');
   const [bus, setBus] = useState(null);
   const [rotations, setRotations] = useState({});
+  // Tyres bumped off an occupied target position and sent to Spare/Store
+  // instead of another position on this bus, keyed by tyre id -> the
+  // send_to_store fields needed to dismount them. Kept separate from
+  // `rotations` (which is only ever position-to-position moves on this bus).
+  const [spareDismounts, setSpareDismounts] = useState({});
   const [odometerKm, setOdometerKm] = useState('');
   const [reason, setReason] = useState('');
   const [result, setResult] = useState(null);
@@ -48,6 +53,16 @@ export default function BatchRotationPage() {
   const [activeSlot, setActiveSlot] = useState(null);
   const [modalToPosition, setModalToPosition] = useState('');
   const [modalNsd, setModalNsd] = useState('');
+
+  // Occupied-target handling for the slot modal below: picking a position
+  // that already has a tyre on it requires deciding what happens to that
+  // occupant. It can only be sent to Spare or moved to a position that's
+  // currently empty (never the slot the primary tyre is itself vacating),
+  // so resolving it never depends on submission order.
+  const [occupantMode, setOccupantMode] = useState('spare');
+  const [occupantTo, setOccupantTo] = useState('');
+  const [occupantNsd, setOccupantNsd] = useState('');
+  const [occupantStoredAt, setOccupantStoredAt] = useState('');
 
   useEffect(() => {
     api.get('/depots').then(setDepots).catch(() => {});
@@ -64,6 +79,7 @@ export default function BatchRotationPage() {
   useEffect(() => {
     setBus(null);
     setRotations({});
+    setSpareDismounts({});
     setResult(null);
     setError('');
     setTyreSearch('');
@@ -83,8 +99,24 @@ export default function BatchRotationPage() {
   // obviously-conflicting submission client-side.
   const claimedPositions = new Set(Object.values(rotations).map((r) => r.to_position).filter(Boolean));
 
+  const tyreByPosition = Object.fromEntries((bus?.tyre_position_map || []).map((s) => [s.position, s.tyre]));
+  const modalOccupant = activeSlot?.tyre && modalToPosition ? tyreByPosition[modalToPosition] : null;
+  const showOccupantBump = !!(
+    modalOccupant &&
+    modalOccupant.id !== activeSlot?.tyre?.id &&
+    !rotations[modalOccupant.id]?.to_position &&
+    !spareDismounts[modalOccupant.id]
+  );
+  const occupantEmptyPositions = (bus?.position_labels || []).filter(
+    (p) => p !== activeSlot?.position && p !== modalToPosition && !claimedPositions.has(p) && !tyreByPosition[p]
+  );
+
   function openSlotModal(slot) {
     setActiveSlot(slot);
+    setOccupantMode('spare');
+    setOccupantTo('');
+    setOccupantNsd('');
+    setOccupantStoredAt(bus?.depot_name ? `${bus.depot_name} Store` : '');
     if (slot.tyre) {
       const existing = rotations[slot.tyre.id] || {};
       setModalToPosition(existing.to_position ?? '');
@@ -92,25 +124,94 @@ export default function BatchRotationPage() {
     }
   }
 
+  // Re-derives occupant defaults whenever the target position changes while
+  // the modal is open (rather than only at open-time), so picking a
+  // different occupied position mid-edit re-prefills its NSD.
+  useEffect(() => {
+    if (!activeSlot?.tyre) return;
+    const occ = tyreByPosition[modalToPosition];
+    if (occ && occ.id !== activeSlot.tyre.id) {
+      setOccupantMode('spare');
+      setOccupantTo('');
+      setOccupantNsd(occ.last_nsd_value != null ? String(occ.last_nsd_value) : '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalToPosition]);
+
   function closeTyreModal() {
     setActiveSlot(null);
     setModalToPosition('');
     setModalNsd('');
   }
 
+  // Undoes a bump this tyre previously staged for some other occupant, if
+  // that occupant's plan is still the one this tyre created (the user may
+  // have since edited that occupant's own slot directly, in which case its
+  // entry belongs to them now and must not be touched).
+  function retractPriorBump(tyreId, prevBumpedId) {
+    if (!prevBumpedId) return;
+    setRotations((r) => {
+      if (r[prevBumpedId]?.bumpedBy !== tyreId) return r;
+      const next = { ...r };
+      delete next[prevBumpedId];
+      return next;
+    });
+    setSpareDismounts((d) => {
+      if (d[prevBumpedId]?.bumpedBy !== tyreId) return d;
+      const next = { ...d };
+      delete next[prevBumpedId];
+      return next;
+    });
+  }
+
   function saveRotation(e) {
     e.preventDefault();
+    const tyreId = activeSlot.tyre.id;
+    const prevBumpedId = rotations[tyreId]?.bumpedOccupantId;
+    if (prevBumpedId && prevBumpedId !== modalOccupant?.id) {
+      retractPriorBump(tyreId, prevBumpedId);
+    }
+
+    // Re-saving without touching the target position (showOccupantBump is
+    // false the second time around, since the occupant's own entry now
+    // exists) must still remember that this tyre is the one that staged it,
+    // so a later retarget can find and retract it.
+    let bumpedOccupantId = modalOccupant && (rotations[modalOccupant.id]?.bumpedBy === tyreId || spareDismounts[modalOccupant.id]?.bumpedBy === tyreId)
+      ? modalOccupant.id
+      : undefined;
+    if (showOccupantBump) {
+      bumpedOccupantId = modalOccupant.id;
+      if (occupantMode === 'spare') {
+        setSpareDismounts((d) => ({
+          ...d,
+          [modalOccupant.id]: {
+            nsd_value: occupantNsd,
+            stored_at: occupantStoredAt,
+            reason: `Bumped from ${modalToPosition} during rotation of ${activeSlot.tyre.tyre_number}`,
+            bumpedBy: tyreId,
+          },
+        }));
+      } else {
+        setRotations((r) => ({
+          ...r,
+          [modalOccupant.id]: { to_position: occupantTo, nsd_value: '', bumpedBy: tyreId },
+        }));
+      }
+    }
+
     setRotations((r) => ({
       ...r,
-      [activeSlot.tyre.id]: { to_position: modalToPosition, nsd_value: modalNsd },
+      [tyreId]: { to_position: modalToPosition, nsd_value: modalNsd, bumpedOccupantId },
     }));
     closeTyreModal();
   }
 
   function clearRotation() {
+    const tyreId = activeSlot.tyre.id;
+    retractPriorBump(tyreId, rotations[tyreId]?.bumpedOccupantId);
     setRotations((r) => {
       const next = { ...r };
-      delete next[activeSlot.tyre.id];
+      delete next[tyreId];
       return next;
     });
     closeTyreModal();
@@ -139,17 +240,19 @@ export default function BatchRotationPage() {
 
     const rotation = rotations[slot.tyre.id];
     const hasRotation = !!rotation && !!rotation.to_position;
+    const isSpared = !!spareDismounts[slot.tyre.id];
 
     return (
       <button
         type="button"
         key={slot.position}
-        className={`bus-diagram-tyre${hasRotation ? ' has-reading' : ''}${isHighlighted ? ' highlighted' : ''}`}
+        className={`bus-diagram-tyre${hasRotation || isSpared ? ' has-reading' : ''}${isHighlighted ? ' highlighted' : ''}`}
         onClick={() => openSlotModal(slot)}
       >
         <span className="position-code">{slot.position}</span>
         <span className="tyre-number">{slot.tyre.tyre_number}</span>
         {hasRotation && <span className="reading-summary">&rarr; {rotation.to_position}</span>}
+        {isSpared && <span className="reading-summary">&rarr; Spare</span>}
       </button>
     );
   }
@@ -166,22 +269,50 @@ export default function BatchRotationPage() {
         to_position: r.to_position,
         ...(r.nsd_value !== undefined && r.nsd_value !== '' ? { nsd_value: Number(r.nsd_value) } : {}),
       }));
+    const dismountEntries = Object.entries(spareDismounts).map(([tyreId, d]) => ({ tyre_id: Number(tyreId), ...d }));
 
-    if (rotationEntries.length === 0) {
+    if (rotationEntries.length === 0 && dismountEntries.length === 0) {
       setError('Assign at least one tyre a new position before submitting.');
       return;
     }
 
     setSubmitting(true);
     try {
-      const data = await api.post('/events/batch-rotation', {
-        bus_id: Number(busId),
-        rotations: rotationEntries,
-        odometer_km: odometerKm === '' ? undefined : Number(odometerKm),
-        reason: reason || undefined,
-      });
-      setResult(data);
+      const created = [];
+      const errors = [];
+
+      // Spare/store dismounts vacate their position independent of the bus's
+      // position graph, so they're always safe to apply first -- unlike the
+      // rotations below, they can never fail on "position not free yet".
+      for (const d of dismountEntries) {
+        try {
+          const events = await api.post('/events', {
+            event_type: 'send_to_store',
+            tyre_id: d.tyre_id,
+            nsd_value: Number(d.nsd_value),
+            stored_at: d.stored_at,
+            reason: d.reason,
+          });
+          created.push(...(Array.isArray(events) ? events : [events]));
+        } catch (err) {
+          errors.push({ tyre_id: d.tyre_id, error: err.message });
+        }
+      }
+
+      if (rotationEntries.length > 0) {
+        const data = await api.post('/events/batch-rotation', {
+          bus_id: Number(busId),
+          rotations: rotationEntries,
+          odometer_km: odometerKm === '' ? undefined : Number(odometerKm),
+          reason: reason || undefined,
+        });
+        created.push(...data.created);
+        errors.push(...data.errors);
+      }
+
+      setResult({ created, errors });
       setRotations({});
+      setSpareDismounts({});
     } catch (err) {
       setError(err.message);
     } finally {
@@ -324,9 +455,56 @@ export default function BatchRotationPage() {
                 <option value="">Select position</option>
                 {(bus.position_labels || [])
                   .filter((p) => p !== activeSlot.position && !claimedPositions.has(p))
-                  .map((p) => <option key={p} value={p}>{p}</option>)}
+                  .map((p) => (
+                    <option key={p} value={p}>
+                      {p}{tyreByPosition[p] ? ` (occupied by ${tyreByPosition[p].tyre_number})` : ''}
+                    </option>
+                  ))}
               </select>
             </div>
+            {showOccupantBump && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: '0.5rem 0' }}>
+                <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  <strong>{modalToPosition}</strong> is occupied by <strong>{modalOccupant.tyre_number}</strong>. Choose what happens to it:
+                </div>
+                <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input type="radio" checked={occupantMode === 'spare'} onChange={() => setOccupantMode('spare')} /> Send to Spare
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input
+                      type="radio"
+                      checked={occupantMode === 'move'}
+                      onChange={() => setOccupantMode('move')}
+                      disabled={occupantEmptyPositions.length === 0}
+                    /> Move to an empty position
+                  </label>
+                </div>
+                {occupantMode === 'spare' ? (
+                  <>
+                    <div className="field">
+                      <label>{modalOccupant.tyre_number} &mdash; Current NSD</label>
+                      <div className="input-suffix-wrap">
+                        <input type="number" step="0.01" min="0" max="25" value={occupantNsd} onChange={(e) => setOccupantNsd(e.target.value)} required />
+                        <span className="input-suffix">mm</span>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>{modalOccupant.tyre_number} &mdash; Stored At</label>
+                      <input value={occupantStoredAt} onChange={(e) => setOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
+                    </div>
+                  </>
+                ) : (
+                  <div className="field">
+                    <label>{modalOccupant.tyre_number} &mdash; New Position</label>
+                    <select value={occupantTo} onChange={(e) => setOccupantTo(e.target.value)} required>
+                      <option value="">Select position</option>
+                      {occupantEmptyPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="field">
               <label>NSD Value</label>
               <div className="input-suffix-wrap">

@@ -11,7 +11,9 @@ export const AMENDABLE_FIELDS = {
   send_to_repair: ['reason', 'nsd_value'],
   inter_bus_transfer: ['to_bus_id', 'to_position', 'reason'],
   send_to_store: ['nsd_value', 'stored_at', 'reason'],
-  condemnation: ['nsd_value', 'reason'],
+  // "Scrap" in the UI -- absorbed the old separate 'scrap' event type's
+  // paperwork fields (mirrors backend/src/utils/tyreEvents.js).
+  condemnation: ['nsd_value', 'reason', 'scrap_value', 'vendor_name', 'vendor_location', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'store_manager'],
   purchase_intake: ['notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date'],
   fitment_created: ['reason'],
   reservation: ['reason'],
@@ -19,8 +21,6 @@ export const AMENDABLE_FIELDS = {
   retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose'],
   retread_completed: ['vendor_name', 'vendor_location', 'retread_cost', 'invoice_no', 'invoice_date', 'notes', 'outcome', 'reason'],
   warranty_claim: ['reason', 'notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'vendor_location'],
-  scrap: ['scrap_value', 'reason', 'vendor_name', 'vendor_location', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'store_manager', 'nsd_value'],
-  scrap_disposal: ['reason'],
 };
 
 export const FIELD_LABELS = {

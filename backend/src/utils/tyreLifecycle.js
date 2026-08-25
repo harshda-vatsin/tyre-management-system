@@ -67,11 +67,16 @@ for (const status of ALL_STATUSES) {
   TRANSITIONS[status] = TERMINAL_STATUSES.includes(status) ? [] : ALL_STATUSES.filter((s) => s !== status);
 }
 
+// 'scrap' and 'scrap_disposal' were folded into 'condemnation' (relabeled
+// "Scrap" in the UI) -- both were terminal write-off events with no
+// meaningful distinction from condemnation once it absorbed scrap's paperwork
+// fields (scrap_value, vendor_name, gate_pass_no, ...); see createCondemnation
+// in tyreEvents.js and db.js's tyre_events_event_type_check migration.
 const EVENT_TYPES = [
   'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
   'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
   'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-  'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim', 'scrap', 'scrap_disposal',
+  'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
 ];
 
 // Canonical outcome vocabulary, keyed by event type -- the single source

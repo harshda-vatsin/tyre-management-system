@@ -18,11 +18,11 @@ const { ApiError } = require('./apiError');
 const { EVENT_OUTCOMES } = require('./tyreLifecycle');
 
 const DEPOT_SCOPED_ROLES = [ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR];
-// Condemnation and Send-to-Store are service-removal actions; SRS UC-13 assigns
-// Condemn explicitly to Depot Manager (not Tyre Supervisor), and Send-to-Store
-// is treated the same way by analogy since it's the same class of action.
-// Scrap is the same class of destructive terminal action as condemnation.
-const ELEVATED_EVENT_TYPES = ['send_to_store', 'condemnation', 'scrap'];
+// Condemnation ("Scrap" in the UI) and Send-to-Store are service-removal
+// actions; SRS UC-13 assigns Condemn explicitly to Depot Manager (not Tyre
+// Supervisor), and Send-to-Store is treated the same way by analogy since
+// it's the same class of action.
+const ELEVATED_EVENT_TYPES = ['send_to_store', 'condemnation'];
 
 // Tyre Card Amendment workflow: which tyre_events columns may be corrected
 // per event_type. Deliberately excludes structural/relational fields (bus_id,
@@ -38,7 +38,9 @@ const AMENDABLE_FIELDS = {
   send_to_repair: ['reason', 'nsd_value'],
   inter_bus_transfer: ['to_bus_id', 'to_position', 'reason'],
   send_to_store: ['nsd_value', 'stored_at', 'reason'],
-  condemnation: ['nsd_value', 'reason'],
+  // "Scrap" in the UI -- absorbed the old separate 'scrap' event type's
+  // paperwork fields (see createCondemnation below).
+  condemnation: ['nsd_value', 'reason', 'scrap_value', 'vendor_name', 'vendor_location', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'store_manager'],
   purchase_intake: ['notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date'],
   fitment_created: ['reason'],
   reservation: ['reason'],
@@ -46,8 +48,6 @@ const AMENDABLE_FIELDS = {
   retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose'],
   retread_completed: ['vendor_name', 'vendor_location', 'retread_cost', 'invoice_no', 'invoice_date', 'notes', 'outcome', 'reason'],
   warranty_claim: ['reason', 'notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'vendor_location'],
-  scrap: ['scrap_value', 'reason', 'vendor_name', 'vendor_location', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'store_manager', 'nsd_value'],
-  scrap_disposal: ['reason'],
 };
 
 // COALESCE(@event_date, NOW_SQL): binding an explicit NULL parameter
@@ -229,10 +229,6 @@ function createTyreEvent(user, eventType, payload) {
             return createRetreadCompleted(user, payload);
           case 'warranty_claim':
             return createWarrantyClaim(user, payload);
-          case 'scrap':
-            return createScrap(user, payload);
-          case 'scrap_disposal':
-            return createScrapDisposal(user, payload);
           default:
             throw new ApiError(400, `Unknown event_type: ${eventType}`);
         }
@@ -577,11 +573,17 @@ async function createSendToStore(user, { tyre_id, reason, nsd_value, stored_at, 
   return [event];
 }
 
-async function createCondemnation(user, { tyre_id, reason, nsd_value, odometer_km, event_date }) {
+// "Scrap" in the UI (event_type stays 'condemnation' -- see AMENDABLE_FIELDS
+// above). Absorbed the old separate 'scrap' event type's paperwork fields
+// (scrap_value, vendor_name, gate_pass_no, ...): the two were the same class
+// of terminal write-off with no meaningful distinction once condemnation
+// carries the same optional fields, so there's no reason to keep them apart.
+// nsd_value is optional (not every write-off has a fresh reading on hand --
+// the MIS "Scraped Tyre Details" sheet's Minimum NSD column is often blank).
+async function createCondemnation(user, { tyre_id, reason, nsd_value, odometer_km, scrap_value, vendor_name, vendor_location, gate_pass_no, invoice_no, invoice_date, approved_by, store_manager, event_date }) {
   const tyre = await getTyre(tyre_id);
   if (!reason) throw new ApiError(400, 'reason is required');
-  const nsdResult = validateNsd(nsd_value);
-  if (!nsdResult.valid) throw new ApiError(400, nsdResult.error);
+  const nsd = normalizeOptionalNsd(nsd_value);
   assertDepotScope(user, tyre.current_depot_id);
 
   const event = await insertEventRow({
@@ -591,8 +593,16 @@ async function createCondemnation(user, { tyre_id, reason, nsd_value, odometer_k
     depot_id: tyre.current_depot_id,
     from_bus_id: tyre.current_bus_id,
     from_position: tyre.current_position,
-    nsd_value: nsdResult.value,
+    nsd_value: nsd,
     odometer_km: odometer_km ?? null,
+    scrap_value: scrap_value ?? null,
+    vendor_name,
+    vendor_location,
+    gate_pass_no,
+    invoice_no,
+    invoice_date,
+    approved_by,
+    store_manager,
     reason,
     performed_by: user.id,
   });
@@ -827,68 +837,6 @@ async function createWarrantyClaim(user, { tyre_id, outcome, reason, notes, vend
 
   const targetStatus = outcome === 'closed' ? 'In Store' : 'Warranty';
   const { before, after } = await transitionTyreStatus(tyre.id, targetStatus, {});
-  await auditTyreMutation(user, before, after);
-  await auditTyreEvent(user, event);
-  return [event];
-}
-
-// Terminal write-off. Elevated (Depot Manager/Administrator), same class of
-// action as condemnation.
-async function createScrap(user, { tyre_id, reason, scrap_value, vendor_name, vendor_location, gate_pass_no, invoice_no, invoice_date, approved_by, store_manager, odometer_km, nsd_value, event_date }) {
-  const tyre = await getTyre(tyre_id);
-  if (!reason) throw new ApiError(400, 'reason is required');
-  assertDepotScope(user, tyre.current_depot_id);
-  const nsd = normalizeOptionalNsd(nsd_value);
-
-  const event = await insertEventRow({
-    tyre_id: tyre.id,
-    event_type: 'scrap',
-    event_date: event_date || undefined,
-    depot_id: tyre.current_depot_id,
-    from_bus_id: tyre.current_bus_id,
-    from_position: tyre.current_position,
-    scrap_value: scrap_value ?? null,
-    vendor_name,
-    vendor_location,
-    gate_pass_no,
-    invoice_no,
-    invoice_date,
-    approved_by,
-    store_manager,
-    odometer_km: odometer_km ?? null,
-    nsd_value: nsd,
-    reason,
-    performed_by: user.id,
-  });
-
-  const { before, after } = await transitionTyreStatus(tyre.id, 'Scrapped', { current_bus_id: null, current_position: null });
-  await auditTyreMutation(user, before, after);
-  await auditTyreEvent(user, event);
-  await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
-  return [event];
-}
-
-// Records a post-scrap administrative milestone (physically disposed of /
-// archived out of active records). Scrapped is terminal and stays terminal
-// -- these are timeline entries describing what happened to a scrapped
-// tyre, not further "where is it" moves, so status never leaves Scrapped.
-async function createScrapDisposal(user, { tyre_id, milestone, reason, event_date }) {
-  const tyre = await getTyre(tyre_id);
-  if (!['Disposed', 'Archived'].includes(milestone)) {
-    throw new ApiError(400, 'milestone must be one of: Disposed, Archived');
-  }
-  assertDepotScope(user, tyre.current_depot_id);
-
-  const event = await insertEventRow({
-    tyre_id: tyre.id,
-    event_type: 'scrap_disposal',
-    event_date: event_date || undefined,
-    depot_id: tyre.current_depot_id,
-    reason: `${milestone}${reason ? `: ${reason}` : ''}`,
-    performed_by: user.id,
-  });
-
-  const { before, after } = await transitionTyreStatus(tyre.id, 'Scrapped', {});
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   return [event];

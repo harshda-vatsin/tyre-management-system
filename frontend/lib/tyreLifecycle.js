@@ -86,7 +86,9 @@ export const EVENT_TYPES = [
   { value: 'puncture_repair', label: 'Repair Completed' },
   { value: 'inter_bus_transfer', label: 'Inter-Bus Transfer' },
   { value: 'send_to_store', label: 'Sending to Store', elevated: true },
-  { value: 'condemnation', label: 'Condemnation', elevated: true },
+  // 'scrap' and 'scrap_disposal' were folded into this event type -- it now
+  // carries their paperwork fields too, so there's no separate "Scrap" entry.
+  { value: 'condemnation', label: 'Scrap', elevated: true },
   { value: 'purchase_intake', label: 'Purchase Intake', hiddenFromLogEvent: true },
   { value: 'fitment_created', label: 'Fitment (Mount from Store)' },
   { value: 'reservation', label: 'Reservation Update' },
@@ -94,8 +96,6 @@ export const EVENT_TYPES = [
   { value: 'retread_sent', label: 'Send to Retread' },
   { value: 'retread_completed', label: 'Retread Completed' },
   { value: 'warranty_claim', label: 'Warranty Claim' },
-  { value: 'scrap', label: 'Scrap', elevated: true },
-  { value: 'scrap_disposal', label: 'Scrap Disposal' },
 ];
 
 export const EVENT_TYPE_LABELS = Object.fromEntries(EVENT_TYPES.map((e) => [e.value, e.label]));
@@ -124,7 +124,7 @@ export function describeEvent(e, pressureUnit, formatPressure) {
     case 'send_to_store':
       return `Removed from ${e.from_bus_registration_no || '-'}/${e.from_position || '-'}, NSD ${e.nsd_value} mm, stored at ${e.stored_at} - ${e.reason}`;
     case 'condemnation':
-      return `Condemned at NSD ${e.nsd_value} mm - ${e.reason}`;
+      return `Scrapped${e.nsd_value != null ? ` at NSD ${e.nsd_value} mm` : ''}${e.scrap_value != null ? ` (value ${e.scrap_value})` : ''} - ${e.reason}`;
     case 'purchase_intake':
       return `Tyre record created${e.notes ? ` - ${e.notes}` : ''}`;
     case 'fitment_created':
@@ -139,10 +139,6 @@ export function describeEvent(e, pressureUnit, formatPressure) {
       return `Retread completed by "${e.vendor_name || '-'}"${e.retread_cost != null ? `, cost ${e.retread_cost}` : ''}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'warranty_claim':
       return e.reason || 'Warranty claim update';
-    case 'scrap':
-      return `Scrapped${e.scrap_value != null ? ` (value ${e.scrap_value})` : ''} - ${e.reason}`;
-    case 'scrap_disposal':
-      return e.reason || 'Disposal update';
     default:
       return '-';
   }

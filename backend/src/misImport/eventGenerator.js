@@ -15,7 +15,10 @@
  * during a live import.
  */
 
-const EVENT_GENERATOR_VERSION = 1;
+// Bumped from 1: the 'scrap' sheet's derivation rule changed which
+// eventType it produces ('scrap' -> 'condemnation', now that the separate
+// 'scrap' event type has been folded into condemnation).
+const EVENT_GENERATOR_VERSION = 2;
 
 // Placeholder written into an intent's payload wherever the real value is
 // "whatever tyre this row's own createTyre step just created" -- the
@@ -149,14 +152,17 @@ function normalizeRetreadOutcome(raw) {
 
 // Scraped Tyre Details: terminal write-off. The sheet conflates "gate pass"
 // and "invoice" into one column (its own header says "Gate Pass/Invoice
-// No.") -- mapped to both createScrap() fields rather than picking one
+// No.") -- mapped to both createCondemnation() fields rather than picking one
 // arbitrarily, since the source genuinely doesn't distinguish them.
+// eventType is 'condemnation' ("Scrap" in the UI) -- the old separate
+// 'scrap' event type was folded into it, since createCondemnation now
+// carries the same optional paperwork fields (see tyreEvents.js).
 registerEventGenerator('scrap', (row) => {
   if (!row.scrap_declared_date) return [];
   const { tyreRef, createTyre } = resolveOrCreateTyre(row);
   if (!tyreRef) return [];
   return [{
-    eventType: 'scrap',
+    eventType: 'condemnation',
     eventDate: row.scrap_declared_date,
     createTyre,
     payload: {

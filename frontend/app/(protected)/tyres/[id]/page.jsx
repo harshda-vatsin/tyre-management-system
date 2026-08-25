@@ -36,7 +36,7 @@ const QUICK_ACTIONS = [
   { eventType: 'retread_sent', label: 'Send to Retread' },
   { eventType: 'retread_completed', label: 'Retread Completed' },
   { eventType: 'warranty_claim', label: 'Warranty Claim' },
-  { eventType: 'scrap', label: 'Scrap', elevated: true },
+  { eventType: 'condemnation', label: 'Scrap', elevated: true },
 ];
 
 function describeEvent(e, pressureUnit) {

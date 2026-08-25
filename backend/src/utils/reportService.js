@@ -321,7 +321,7 @@ async function tyreLifeReport(filters) {
   // Excel Parity Gap-Closure: km-based "Life Used" per the Tyre Card sheet --
   // the most recent fitment_created's odometer_km, compared against whichever
   // odometer reading later ended that stint: a removal-type event
-  // (rotation/send_to_repair/send_to_store/condemnation/scrap/retread_sent)
+  // (rotation/send_to_repair/send_to_store/condemnation/retread_sent)
   // if one was logged with a reading, else the current bus's live odometer
   // if the tyre is still mounted from that same fitment.
   // Filters "after this fitment" by event id rather than event_date: sub-
@@ -346,7 +346,7 @@ async function tyreLifeReport(filters) {
   const removalOdometerSql = `
     (SELECT e.odometer_km FROM tyre_events e
      WHERE e.tyre_id = t.id AND e.odometer_km IS NOT NULL
-       AND (e.event_type IN ('rotation', 'send_to_repair', 'send_to_store', 'condemnation', 'scrap', 'retread_sent')
+       AND (e.event_type IN ('rotation', 'send_to_repair', 'send_to_store', 'condemnation', 'retread_sent')
             OR (e.event_type = 'replacement' AND e.from_position IS NOT NULL))
        AND e.id > (${lastFitmentIdSql})
      ORDER BY e.event_date ASC, e.id ASC LIMIT 1)
@@ -427,8 +427,11 @@ async function inspectionComplianceReport(filters) {
     }));
 }
 
-// ---------- 10. Condemned Tyres Report ----------
-async function condemnedTyresReport(filters) {
+// ---------- 10. Scrap Report ----------
+// Merges what used to be two separate reports (Condemned Tyres + Scrap
+// Analysis) now that 'scrap' has been folded into the 'condemnation' event
+// type -- there's no longer a real distinction to report on separately.
+async function scrapReport(filters) {
   const { depot_id, from, to } = filters;
   const clauses = [`t.status = 'Scrapped'`];
   const params = {};
@@ -440,6 +443,13 @@ async function condemnedTyresReport(filters) {
         t.tyre_number, t.brand, d.name AS depot_name,
         ${lastEventValueSql('condemnation', 'event_date')} AS condemned_date,
         ${lastEventValueSql('condemnation', 'nsd_value')} AS nsd_at_condemnation,
+        ${lastEventValueSql('condemnation', 'scrap_value')} AS scrap_value,
+        ${lastEventValueSql('condemnation', 'vendor_name')} AS vendor_name,
+        ${lastEventValueSql('condemnation', 'vendor_location')} AS vendor_location,
+        ${lastEventValueSql('condemnation', 'gate_pass_no')} AS gate_pass_no,
+        ${lastEventValueSql('condemnation', 'invoice_no')} AS invoice_no,
+        ${lastEventValueSql('condemnation', 'invoice_date')} AS invoice_date,
+        ${lastEventValueSql('condemnation', 'store_manager')} AS store_manager,
         ${lastEventValueSql('condemnation', 'reason')} AS reason,
         (SELECT u.username FROM tyre_events ce JOIN users u ON u.id = ce.performed_by WHERE ce.tyre_id = t.id AND ce.event_type = 'condemnation' ORDER BY ce.event_date DESC, ce.id DESC LIMIT 1) AS authorised_by_username
       FROM tyres t
@@ -495,30 +505,6 @@ async function warrantyClaimsReport(filters) {
       SELECT
         e.event_date, t.tyre_number, t.status AS current_tyre_status, e.reason, e.notes,
         e.vendor_name, e.vendor_location, e.gate_pass_no, e.invoice_no, e.invoice_date, e.approved_by,
-        d.name AS depot_name, u.username AS performed_by_username
-      FROM tyre_events e
-      JOIN tyres t ON t.id = e.tyre_id
-      LEFT JOIN depots d ON d.id = e.depot_id
-      LEFT JOIN users u ON u.id = e.performed_by
-      WHERE ${clauses.join(' AND ')}
-      ORDER BY e.event_date DESC
-    `)
-    .all(params);
-}
-
-// ---------- 13. Scrap Analysis Report ----------
-async function scrapAnalysisReport(filters) {
-  const { depot_id, from, to } = filters;
-  const clauses = [`e.event_type = 'scrap'`];
-  const params = {};
-  depotScopeClause('e.depot_id', depot_id, clauses, params);
-  dateRangeClause('e.event_date', from, to, clauses, params);
-
-  return db
-    .prepare(`
-      SELECT
-        e.event_date, t.tyre_number, t.brand, e.scrap_value, e.reason,
-        e.vendor_name, e.vendor_location, e.gate_pass_no, e.invoice_no, e.invoice_date, e.approved_by, e.store_manager,
         d.name AS depot_name, u.username AS performed_by_username
       FROM tyre_events e
       JOIN tyres t ON t.id = e.tyre_id
@@ -748,7 +734,7 @@ const REPORTS = {
       { key: 'depot_name', label: 'Depot' },
       { key: 'purchase_date', label: 'Purchase Date' },
       { key: 'status', label: 'Status' },
-      { key: 'condemned_date', label: 'Condemned Date' },
+      { key: 'condemned_date', label: 'Scrap Date' },
       { key: 'days_in_service', label: 'Days in Service' },
       { key: 'life_used_km', label: 'Life Used (km)' },
     ],
@@ -772,8 +758,8 @@ const REPORTS = {
     ],
     getRows: inspectionComplianceReport,
   },
-  'condemned-tyres': {
-    name: 'Condemned Tyres Report',
+  'scrap-report': {
+    name: 'Scrap Report',
     filters: [
       { key: 'depot_id', label: 'Depot', type: 'depot' },
       { key: 'from', label: 'From', type: 'date' },
@@ -783,12 +769,19 @@ const REPORTS = {
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'brand', label: 'Brand' },
       { key: 'depot_name', label: 'Depot' },
-      { key: 'condemned_date', label: 'Condemned Date' },
-      { key: 'nsd_at_condemnation', label: 'NSD at Condemnation' },
+      { key: 'condemned_date', label: 'Scrap Date' },
+      { key: 'nsd_at_condemnation', label: 'NSD at Scrap' },
+      { key: 'scrap_value', label: 'Scrap Value' },
+      { key: 'vendor_name', label: 'Vendor' },
+      { key: 'vendor_location', label: 'Vendor Location' },
+      { key: 'gate_pass_no', label: 'Gate Pass No.' },
+      { key: 'invoice_no', label: 'Invoice No.' },
+      { key: 'invoice_date', label: 'Invoice Date' },
+      { key: 'store_manager', label: 'Store Manager' },
       { key: 'reason', label: 'Reason' },
       { key: 'authorised_by_username', label: 'Authorised By' },
     ],
-    getRows: condemnedTyresReport,
+    getRows: scrapReport,
   },
   'retread-history': {
     name: 'Retread History Report',
@@ -837,31 +830,6 @@ const REPORTS = {
       { key: 'performed_by_username', label: 'Performed By' },
     ],
     getRows: warrantyClaimsReport,
-  },
-  'scrap-analysis': {
-    name: 'Scrap Analysis Report',
-    filters: [
-      { key: 'depot_id', label: 'Depot', type: 'depot' },
-      { key: 'from', label: 'From', type: 'date' },
-      { key: 'to', label: 'To', type: 'date' },
-    ],
-    columns: [
-      { key: 'event_date', label: 'Date' },
-      { key: 'tyre_number', label: 'Tyre Number' },
-      { key: 'brand', label: 'Brand' },
-      { key: 'scrap_value', label: 'Scrap Value' },
-      { key: 'vendor_name', label: 'Vendor' },
-      { key: 'vendor_location', label: 'Vendor Location' },
-      { key: 'gate_pass_no', label: 'Gate Pass No.' },
-      { key: 'invoice_no', label: 'Invoice No.' },
-      { key: 'invoice_date', label: 'Invoice Date' },
-      { key: 'approved_by', label: 'Approved By' },
-      { key: 'store_manager', label: 'Store Manager' },
-      { key: 'depot_name', label: 'Depot' },
-      { key: 'reason', label: 'Reason' },
-      { key: 'performed_by_username', label: 'Performed By' },
-    ],
-    getRows: scrapAnalysisReport,
   },
   'wheel-alignment': {
     name: 'Wheel Alignment Report',

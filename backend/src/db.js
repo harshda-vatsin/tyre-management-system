@@ -303,7 +303,7 @@ const ready = (async () => {
         'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
         'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
         'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-        'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim', 'scrap', 'scrap_disposal'
+        'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim'
       )),
       event_date TEXT NOT NULL DEFAULT ${NOW},
       bus_id INTEGER REFERENCES buses(id),
@@ -911,6 +911,27 @@ const ready = (async () => {
   await exec(`
     ALTER TABLE tyre_events DROP CONSTRAINT IF EXISTS tyre_events_outcome_check;
     ALTER TABLE tyre_events ADD CONSTRAINT tyre_events_outcome_check CHECK (${buildOutcomeCheckSql()});
+  `);
+
+  // 'scrap' and 'scrap_disposal' event types were folded into 'condemnation'
+  // (relabeled "Scrap" in the UI, see tyreEvents.js's createCondemnation) --
+  // every scrap-specific column (scrap_value, vendor_name, gate_pass_no, ...)
+  // already lives on this same wide tyre_events table, so relabeling loses no
+  // data. Existing rows are migrated before the stricter CHECK constraint
+  // below is (re-)applied, since ADD CONSTRAINT validates all existing rows
+  // and would otherwise fail on a database that already has scrap events in
+  // it. Safe to run unconditionally on every boot: a no-op once no rows are
+  // left with the old event_type values.
+  await exec(`UPDATE tyre_events SET event_type = 'condemnation' WHERE event_type IN ('scrap', 'scrap_disposal')`);
+
+  await exec(`
+    ALTER TABLE tyre_events DROP CONSTRAINT IF EXISTS tyre_events_event_type_check;
+    ALTER TABLE tyre_events ADD CONSTRAINT tyre_events_event_type_check CHECK (event_type IN (
+      'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
+      'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
+      'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
+      'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim'
+    ));
   `);
 
   // SRS §8.3: pressure unit defaults to PSI until an Admin changes it.

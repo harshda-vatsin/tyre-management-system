@@ -221,7 +221,7 @@ const EVENT_TYPE_LABELS = {
   puncture_repair: 'Puncture Repair',
   inter_bus_transfer: 'Inter-Bus Transfer',
   send_to_store: 'Sent to Store',
-  condemnation: 'Condemnation',
+  condemnation: 'Scrap',
 };
 
 function getEventDescription(e) {
@@ -243,7 +243,7 @@ function getEventDescription(e) {
     case 'send_to_store':
       return `Removed from ${e.from_bus_registration_no || '—'}/${e.from_position || '—'}, NSD ${e.nsd_value || '—'} mm, stored at ${e.stored_at || '—'} — ${e.reason || '—'}`;
     case 'condemnation':
-      return `Condemned at NSD ${e.nsd_value || '—'} mm — ${e.reason || '—'}`;
+      return `Scrapped${e.nsd_value != null ? ` at NSD ${e.nsd_value} mm` : ''}${e.scrap_value != null ? ` (value ${e.scrap_value})` : ''} — ${e.reason || '—'}`;
     default:
       return '—';
   }
