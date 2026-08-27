@@ -7,7 +7,7 @@
 const express = require('express');
 const db = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { createTyreEvent, ApiError, AMENDABLE_FIELDS } = require('../utils/tyreEvents');
+const { createTyreEvent, createRotationSet, ApiError, AMENDABLE_FIELDS } = require('../utils/tyreEvents');
 const { validateNsd, validatePressure } = require('../utils/readingValidation');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES, isDepotScoped } = require('../utils/roles');
@@ -175,40 +175,26 @@ router.post('/batch', authorize(...WRITE_ROLES), asyncHandler(async (req, res) =
 // Excel Parity Gap-Closure: rotates every tyre on one bus in a single
 // session (the Excel's "Tyre Rotation" sheet swaps up to 6 positions at
 // once, each with its own NSD), instead of one rotation event at a time.
-// Mirrors /batch above exactly: delegates to the existing createTyreEvent
-// per tyre, one bad row doesn't roll back the others.
-router.post('/batch-rotation', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
-  const { bus_id, event_date, odometer_km, rotations } = req.body || {};
-  if (!bus_id || !Array.isArray(rotations) || rotations.length === 0) {
-    return res.status(400).json({ error: 'bus_id and a non-empty rotations array are required' });
+// Unlike a loop of single rotation events, this is all-or-nothing: `moves`
+// is validated as one complete final layout (see createRotationSet) before
+// anything is written, which is what makes a closed rotation cycle or a
+// direct two-tyre swap possible at all -- no ordering of "which leg applies
+// first" can ever satisfy N independent "is this position free right now"
+// checks. `moves` may include `dismount: true` entries (Send to Spare) so a
+// tyre bumped off its target position leaves the bus in the same atomic
+// operation as everyone else's rotation.
+router.post('/rotation-set', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
+  const { bus_id, event_date, odometer_km, moves } = req.body || {};
+  if (!bus_id || !Array.isArray(moves) || moves.length === 0) {
+    return res.status(400).json({ error: 'bus_id and a non-empty moves array are required' });
   }
-
-  const created = [];
-  const errors = [];
 
   try {
-    for (const rotation of rotations) {
-      const { tyre_id, to_position, nsd_value, reason } = rotation;
-      if (!tyre_id || !to_position) {
-        errors.push({ tyre_id: tyre_id || null, error: 'tyre_id and to_position are required for each rotation' });
-        continue;
-      }
-
-      try {
-        created.push(...(await createTyreEvent(req.user, 'rotation', { tyre_id, to_position, nsd_value, reason, odometer_km, event_date })));
-      } catch (err) {
-        if (err instanceof ApiError) {
-          errors.push({ tyre_id, error: err.message });
-        } else {
-          throw err;
-        }
-      }
-    }
+    const created = await createRotationSet(req.user, { bus_id, moves, odometer_km, event_date });
+    res.status(201).json(created);
   } catch (err) {
-    return handleEventError(err, res);
+    handleEventError(err, res);
   }
-
-  res.status(created.length ? 201 : 400).json({ created, errors });
 }));
 
 // Validates and coerces the corrected_values submitted to an amendment,

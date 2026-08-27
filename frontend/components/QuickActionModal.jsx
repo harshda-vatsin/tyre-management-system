@@ -24,13 +24,13 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
 
   // Rotation target-occupancy handling: when the chosen "To Position" is
   // already occupied, the occupant has to go somewhere before this rotation
-  // can be applied. Only a currently-empty position (never the slot this
-  // tyre itself is vacating) is offered as a "move" target, so this never
-  // needs the two-step move to resolve in a particular order -- moving/
-  // dismounting the occupant first always succeeds regardless of when the
-  // primary rotation below is applied.
+  // can be applied -- either a direct swap (the two tyres trade positions),
+  // Spare, or a currently-empty position. All three are submitted as one
+  // atomic /events/rotation-set call (see tyreEvents.js's createRotationSet),
+  // which is what makes the swap option possible at all: neither tyre's
+  // destination is free until the other has already moved.
   const [bus, setBus] = useState(null);
-  const [occupantMode, setOccupantMode] = useState('spare');
+  const [occupantMode, setOccupantMode] = useState('swap');
   const [occupantTo, setOccupantTo] = useState('');
   const [occupantNsd, setOccupantNsd] = useState('');
   const [occupantStoredAt, setOccupantStoredAt] = useState('');
@@ -56,7 +56,7 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
   const emptyPositions = busPositions.filter((p) => p !== tyre.current_position && !(bus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
 
   useEffect(() => {
-    setOccupantMode('spare');
+    setOccupantMode('swap');
     setOccupantTo('');
     setOccupantNsd(occupant?.last_nsd_value != null ? String(occupant.last_nsd_value) : '');
     setOccupantStoredAt(bus?.depot_name ? `${bus.depot_name} Store` : '');
@@ -73,19 +73,33 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
     setSaving(true);
     try {
       if (eventType === 'rotation' && occupant) {
+        // See log-event/page.jsx's identical handling -- the two tyres
+        // involved always move together in one atomic call, since neither's
+        // destination is guaranteed free until the other has already
+        // vacated it (most obviously for a direct swap).
+        const moves = [{
+          tyre_id: tyre.id,
+          to_position: fields.to_position,
+          ...(fields.nsd_value !== undefined && fields.nsd_value !== '' ? { nsd_value: Number(fields.nsd_value) } : {}),
+          reason: fields.reason || undefined,
+        }];
         if (occupantMode === 'spare') {
-          await api.post('/events', {
-            event_type: 'send_to_store',
+          moves.push({
             tyre_id: occupant.id,
+            dismount: true,
             nsd_value: Number(occupantNsd),
             stored_at: occupantStoredAt,
             reason: `Bumped from ${fields.to_position} during rotation of ${tyre.tyre_number}`,
           });
+        } else if (occupantMode === 'swap') {
+          moves.push({ tyre_id: occupant.id, to_position: tyre.current_position });
         } else {
-          await api.post('/events', { event_type: 'rotation', tyre_id: occupant.id, to_position: occupantTo });
+          moves.push({ tyre_id: occupant.id, to_position: occupantTo });
         }
+        await api.post('/events/rotation-set', { bus_id: tyre.current_bus_id, moves });
+      } else {
+        await api.post('/events', { event_type: eventType, tyre_id: tyre.id, ...fields });
       }
-      await api.post('/events', { event_type: eventType, tyre_id: tyre.id, ...fields });
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -114,7 +128,10 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
                 <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                   <strong>{fields.to_position}</strong> is occupied by <strong>{occupant.tyre_number}</strong>. Choose what happens to it:
                 </div>
-                <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+                <div className="field" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input type="radio" checked={occupantMode === 'swap'} onChange={() => setOccupantMode('swap')} /> Swap positions with it
+                  </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
                     <input type="radio" checked={occupantMode === 'spare'} onChange={() => setOccupantMode('spare')} /> Send to Spare
                   </label>
@@ -127,7 +144,12 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
                     /> Move to an empty position
                   </label>
                 </div>
-                {occupantMode === 'spare' ? (
+                {occupantMode === 'swap' && (
+                  <span className="field-hint" style={{ display: 'block' }}>
+                    {occupant.tyre_number} will move to {tyre.current_position} &mdash; this tyre's current spot.
+                  </span>
+                )}
+                {occupantMode === 'spare' && (
                   <>
                     <div className="field">
                       <label>{occupant.tyre_number} &mdash; Current NSD</label>
@@ -141,7 +163,8 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
                       <input value={occupantStoredAt} onChange={(e) => setOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
                     </div>
                   </>
-                ) : (
+                )}
+                {occupantMode === 'move' && (
                   <div className="field">
                     <label>{occupant.tyre_number} &mdash; New Position</label>
                     <select value={occupantTo} onChange={(e) => setOccupantTo(e.target.value)} required>

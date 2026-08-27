@@ -343,6 +343,132 @@ async function createRotation(user, { tyre_id, to_position, reason, event_date, 
   return [event];
 }
 
+// Atomic multi-tyre repositioning on one bus -- the primitive a single
+// createRotation() call can't be, because assertPositionFree() there checks
+// whatever's on the bus *right now*. A closed rotation cycle (A->B->C->A) or
+// even a plain two-tyre swap (A<->B) never has a target position that's free
+// until another leg of the same move has already landed, so applying them
+// one at a time in any order always fails on whichever leg goes first. This
+// instead validates the *entire final layout* up front (does every mounted
+// tyre land on exactly one position, with nobody colliding?) and only then
+// writes every move together in one transaction -- no per-row free-check,
+// no ordering requirement. `moves` may mix ordinary repositions
+// (`to_position`) with explicit Spare/Store dismounts (`dismount: true`) so
+// "send the displaced tyre to Spare" and "rotate everyone else" land as one
+// indivisible operation instead of two separately-fireable API calls.
+async function createRotationSet(user, { bus_id, moves, odometer_km, event_date }) {
+  if (!bus_id) throw new ApiError(400, 'bus_id is required');
+  if (!Array.isArray(moves) || moves.length === 0) throw new ApiError(400, 'moves must be a non-empty array');
+
+  const bus = await getBus(bus_id);
+  assertDepotScope(user, bus.depot_id);
+  const positions = await getBusModelPositions(bus.bus_model_id);
+
+  const mounted = await db.prepare('SELECT * FROM tyres WHERE current_bus_id = ?').all(bus.id);
+  const tyreById = new Map(mounted.map((t) => [t.id, t]));
+
+  const seenTyreIds = new Set();
+  for (const move of moves) {
+    if (!move.tyre_id) throw new ApiError(400, 'Each move requires a tyre_id');
+    if (seenTyreIds.has(move.tyre_id)) throw new ApiError(400, `Tyre ${move.tyre_id} appears more than once in this rotation`);
+    seenTyreIds.add(move.tyre_id);
+
+    const tyre = tyreById.get(move.tyre_id);
+    if (!tyre) throw new ApiError(400, `Tyre ${move.tyre_id} is not currently mounted on bus ${bus.registration_no}`);
+
+    if (move.dismount) {
+      const nsdResult = validateNsd(move.nsd_value);
+      if (!nsdResult.valid) throw new ApiError(400, nsdResult.error);
+      if (!move.stored_at) throw new ApiError(400, `stored_at is required to send tyre ${tyre.tyre_number} to Spare`);
+    } else {
+      if (!move.to_position) throw new ApiError(400, `to_position is required for tyre ${tyre.tyre_number}`);
+      if (!positions.includes(move.to_position)) {
+        throw new ApiError(400, `to_position must be one of: ${positions.join(', ')}`);
+      }
+    }
+  }
+
+  // Final-layout check: every currently-mounted tyre lands somewhere -- its
+  // submitted destination, nowhere (dismounted), or its own current spot if
+  // this rotation doesn't touch it at all. If two tyres would land on the
+  // same position, that's the one thing no ordering of individual moves can
+  // ever resolve -- reject it up front with exactly which two tyres collide,
+  // rather than a generic "position occupied" on whichever leg runs first.
+  const moveByTyreId = new Map(moves.map((m) => [m.tyre_id, m]));
+  const finalPositionOf = new Map();
+  for (const tyre of mounted) {
+    const move = moveByTyreId.get(tyre.id);
+    if (!move) finalPositionOf.set(tyre.id, tyre.current_position);
+    else if (move.dismount) finalPositionOf.set(tyre.id, null);
+    else finalPositionOf.set(tyre.id, move.to_position);
+  }
+  const tyreIdAtFinalPosition = new Map();
+  for (const [tyreId, position] of finalPositionOf) {
+    if (position == null) continue;
+    const clashingTyreId = tyreIdAtFinalPosition.get(position);
+    if (clashingTyreId) {
+      throw new ApiError(
+        409,
+        `Position ${position} would be occupied by both ${tyreById.get(clashingTyreId).tyre_number} and ${tyreById.get(tyreId).tyre_number} -- give one of them a different destination or send it to Spare.`
+      );
+    }
+    tyreIdAtFinalPosition.set(position, tyreId);
+  }
+
+  const runner = db.transaction(() =>
+    sourceMisRecordContext.run({ source_mis_record_type: null, source_mis_record_id: null }, async () => {
+      const events = [];
+      for (const move of moves) {
+        const tyre = tyreById.get(move.tyre_id);
+        if (move.dismount) {
+          const nsdResult = validateNsd(move.nsd_value);
+          const event = await insertEventRow({
+            tyre_id: tyre.id,
+            event_type: 'send_to_store',
+            event_date: event_date || undefined,
+            depot_id: tyre.current_depot_id,
+            from_bus_id: bus.id,
+            from_position: tyre.current_position,
+            nsd_value: nsdResult.value,
+            odometer_km: odometer_km ?? null,
+            reason: move.reason,
+            stored_at: move.stored_at,
+            performed_by: user.id,
+          });
+          const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null });
+          await auditTyreMutation(user, before, after);
+          await auditTyreEvent(user, event);
+          events.push(event);
+        } else {
+          const nsd = normalizeOptionalNsd(move.nsd_value);
+          const event = await insertEventRow({
+            tyre_id: tyre.id,
+            event_type: 'rotation',
+            event_date: event_date || undefined,
+            bus_id: bus.id,
+            position: move.to_position,
+            depot_id: tyre.current_depot_id,
+            from_position: tyre.current_position,
+            to_position: move.to_position,
+            odometer_km: odometer_km ?? null,
+            nsd_value: nsd,
+            reason: move.reason,
+            performed_by: user.id,
+          });
+          const { before, after } = await transitionTyreStatus(tyre.id, tyre.status, { current_position: move.to_position });
+          await auditTyreMutation(user, before, after);
+          await auditTyreEvent(user, event);
+          events.push(event);
+        }
+      }
+      await maybeUpdateBusOdometer(bus.id, odometer_km);
+      return events;
+    })
+  );
+
+  return runner();
+}
+
 // odometer_km is optional and currently only ever supplied by the MIS
 // importer (Consumption sheet's "Fitment Kms" column, § replacement
 // detection) -- the manual Log Event form has no field for it, so every
@@ -842,4 +968,4 @@ async function createWarrantyClaim(user, { tyre_id, outcome, reason, notes, vend
   return [event];
 }
 
-module.exports = { createTyreEvent, ApiError, AMENDABLE_FIELDS };
+module.exports = { createTyreEvent, createRotationSet, ApiError, AMENDABLE_FIELDS };

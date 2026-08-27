@@ -41,11 +41,13 @@ export default function LogEventPage() {
   const [repBus, setRepBus] = useState(null);
 
   // Rotation target-occupancy handling: see QuickActionModal.jsx for the
-  // identical pattern -- an occupied "To Position" always resolves via the
-  // occupant moving to a currently-empty position or going to Spare, never
-  // into the slot this tyre is itself vacating, so ordering never matters.
+  // identical pattern. An occupied "To Position" resolves via a direct swap
+  // (the two tyres trade positions), the occupant going to Spare, or the
+  // occupant moving to a currently-empty position -- submitted as one atomic
+  // /events/rotation-set call, so a direct swap is safe even though neither
+  // tyre's destination is free until the other one has already moved.
   const [rotationBus, setRotationBus] = useState(null);
-  const [occupantMode, setOccupantMode] = useState('spare');
+  const [occupantMode, setOccupantMode] = useState('swap');
   const [occupantTo, setOccupantTo] = useState('');
   const [occupantNsd, setOccupantNsd] = useState('');
   const [occupantStoredAt, setOccupantStoredAt] = useState('');
@@ -111,7 +113,7 @@ export default function LogEventPage() {
   const rotationEmptyPositions = busPositions.filter((p) => p !== tyre?.current_position && !(rotationBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
 
   useEffect(() => {
-    setOccupantMode('spare');
+    setOccupantMode('swap');
     setOccupantTo('');
     setOccupantNsd(rotationOccupant?.last_nsd_value != null ? String(rotationOccupant.last_nsd_value) : '');
     setOccupantStoredAt(rotationBus?.depot_name ? `${rotationBus.depot_name} Store` : '');
@@ -154,22 +156,37 @@ export default function LogEventPage() {
       }
     }
     try {
+      let count;
       if (eventType === 'rotation' && rotationOccupant) {
+        // Occupied target: the two tyres involved always move together in one
+        // atomic call, since neither's destination is guaranteed free until
+        // the other has already vacated it (most obviously for a direct swap).
+        const moves = [{
+          tyre_id: tyre.id,
+          to_position: fields.to_position,
+          ...(fields.nsd_value !== undefined && fields.nsd_value !== '' ? { nsd_value: Number(fields.nsd_value) } : {}),
+          reason: fields.reason || undefined,
+        }];
         if (occupantMode === 'spare') {
-          await api.post('/events', {
-            event_type: 'send_to_store',
+          moves.push({
             tyre_id: rotationOccupant.id,
+            dismount: true,
             nsd_value: Number(occupantNsd),
             stored_at: occupantStoredAt,
             reason: `Bumped from ${fields.to_position} during rotation of ${tyre.tyre_number}`,
           });
+        } else if (occupantMode === 'swap') {
+          moves.push({ tyre_id: rotationOccupant.id, to_position: tyre.current_position });
         } else {
-          await api.post('/events', { event_type: 'rotation', tyre_id: rotationOccupant.id, to_position: occupantTo });
+          moves.push({ tyre_id: rotationOccupant.id, to_position: occupantTo });
         }
+        const result = await api.post('/events/rotation-set', { bus_id: tyre.current_bus_id, moves });
+        count = result.length;
+      } else {
+        const payload = { event_type: eventType, tyre_id: tyre.id, ...fields };
+        const result = await api.post('/events', payload);
+        count = Array.isArray(result) ? result.length : 1;
       }
-      const payload = { event_type: eventType, tyre_id: tyre.id, ...fields };
-      const result = await api.post('/events', payload);
-      const count = Array.isArray(result) ? result.length : 1;
       setMessage(`Event logged successfully (${count} tyre card ${count === 1 ? 'entry' : 'entries'} created).`);
       setTyre(null);
       setFields({});
@@ -246,7 +263,10 @@ export default function LogEventPage() {
                 <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                   <strong>{fields.to_position}</strong> is occupied by <strong>{rotationOccupant.tyre_number}</strong>. Choose what happens to it:
                 </div>
-                <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+                <div className="field" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
+                    <input type="radio" checked={occupantMode === 'swap'} onChange={() => setOccupantMode('swap')} /> Swap positions with it
+                  </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontWeight: 400 }}>
                     <input type="radio" checked={occupantMode === 'spare'} onChange={() => setOccupantMode('spare')} /> Send to Spare
                   </label>
@@ -259,7 +279,12 @@ export default function LogEventPage() {
                     /> Move to an empty position
                   </label>
                 </div>
-                {occupantMode === 'spare' ? (
+                {occupantMode === 'swap' && (
+                  <span className="field-hint" style={{ display: 'block' }}>
+                    {rotationOccupant.tyre_number} will move to {tyre.current_position} &mdash; this tyre's current spot.
+                  </span>
+                )}
+                {occupantMode === 'spare' && (
                   <>
                     <div className="field">
                       <label>{rotationOccupant.tyre_number} &mdash; Current NSD</label>
@@ -273,7 +298,8 @@ export default function LogEventPage() {
                       <input value={occupantStoredAt} onChange={(e) => setOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
                     </div>
                   </>
-                ) : (
+                )}
+                {occupantMode === 'move' && (
                   <div className="field">
                     <label>{rotationOccupant.tyre_number} &mdash; New Position</label>
                     <select value={occupantTo} onChange={(e) => setOccupantTo(e.target.value)} required>
