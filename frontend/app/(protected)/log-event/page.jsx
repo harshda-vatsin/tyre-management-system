@@ -52,6 +52,19 @@ export default function LogEventPage() {
   const [occupantNsd, setOccupantNsd] = useState('');
   const [occupantStoredAt, setOccupantStoredAt] = useState('');
 
+  // Destination-position occupancy handling, shared by every "land this
+  // tyre on a bus position" event type (Fitment, Puncture Repair's optional
+  // remount, Inter-Bus Transfer): same idea as rotation's occupant panel
+  // above, but there's only one thing to do with a resident tyre -- send it
+  // to Spare -- since (unlike rotation) the incoming tyre has no current
+  // position of its own on the destination bus to swap into. Gated to
+  // Admin/Depot Manager server-side (see displaceOccupantIfAny in
+  // tyreEvents.js) because it's really a Send to Store happening inline.
+  const [destBus, setDestBus] = useState(null);
+  const [destOccupantNsd, setDestOccupantNsd] = useState('');
+  const [destOccupantStoredAt, setDestOccupantStoredAt] = useState('');
+  const [saving, setSaving] = useState(false);
+
   useEffect(() => {
     api.get('/depots').then(setDepots).catch(() => {});
   }, []);
@@ -112,6 +125,12 @@ export default function LogEventPage() {
   const rotationOccupant = (rotationBus?.tyre_position_map || []).find((s) => s.position === fields.to_position)?.tyre || null;
   const rotationEmptyPositions = busPositions.filter((p) => p !== tyre?.current_position && !(rotationBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
 
+  const DEST_POSITION_EVENT_TYPES = ['fitment_created', 'puncture_repair', 'inter_bus_transfer'];
+  const destPositionField = eventType === 'inter_bus_transfer' ? fields.to_position : fields.position;
+  const destOccupant = DEST_POSITION_EVENT_TYPES.includes(eventType)
+    ? (destBus?.tyre_position_map || []).find((s) => s.position === destPositionField)?.tyre || null
+    : null;
+
   useEffect(() => {
     setOccupantMode('swap');
     setOccupantTo('');
@@ -121,13 +140,36 @@ export default function LogEventPage() {
   }, [fields.to_position]);
 
   useEffect(() => {
+    setDestOccupantNsd(destOccupant?.last_nsd_value != null ? String(destOccupant.last_nsd_value) : '');
+    setDestOccupantStoredAt(destBus?.depot_name ? `${destBus.depot_name} Store` : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destPositionField]);
+
+  useEffect(() => {
+    setFields((f) => {
+      if (!destOccupant) {
+        if (f.displace_nsd_value === undefined && f.displace_stored_at === undefined) return f;
+        const { displace_nsd_value, displace_stored_at, displace_reason, ...rest } = f;
+        return rest;
+      }
+      return { ...f, displace_nsd_value: destOccupantNsd, displace_stored_at: destOccupantStoredAt };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destOccupant, destOccupantNsd, destOccupantStoredAt]);
+
+  useEffect(() => {
     const busId = fields.to_bus_id || fields.bus_id;
     if (busId) {
-      api.get(`/buses/${busId}`).then((b) => setDestPositions(b.position_labels));
+      api.get(`/buses/${busId}`).then((b) => {
+        setDestPositions(b.position_labels);
+        if (DEST_POSITION_EVENT_TYPES.includes(eventType)) setDestBus(b);
+      });
     } else {
       setDestPositions([]);
+      setDestBus(null);
     }
-  }, [fields.to_bus_id, fields.bus_id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.to_bus_id, fields.bus_id, eventType]);
 
   if (!canWrite) {
     return <div className="card error-text">Access denied. Event logging is restricted to Tyre Supervisors, Depot Managers, and Administrators.</div>;
@@ -135,6 +177,7 @@ export default function LogEventPage() {
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (saving) return;
     setError('');
     setMessage('');
     if (!tyre) {
@@ -155,6 +198,11 @@ export default function LogEventPage() {
         return;
       }
     }
+    if (destOccupant && !canElevated) {
+      setError(`Position ${destPositionField} is occupied by ${destOccupant.tyre_number}. Sending a mounted tyre to Spare requires a Depot Manager or Administrator.`);
+      return;
+    }
+    setSaving(true);
     try {
       let count;
       if (eventType === 'rotation' && rotationOccupant) {
@@ -192,11 +240,55 @@ export default function LogEventPage() {
       setFields({});
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSaving(false);
     }
   }
 
   function set(key, value) {
     setFields((f) => ({ ...f, [key]: value }));
+  }
+
+  // Shared by Fitment, Puncture Repair's remount, and Inter-Bus Transfer --
+  // labels an occupied position inline in the <option> list rather than
+  // letting the user discover it only after a 409 round trip.
+  function renderDestPositionOptions() {
+    return destPositions.map((p) => {
+      const occ = (destBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre;
+      return <option key={p} value={p}>{p}{occ ? ` (occupied by ${occ.tyre_number})` : ''}</option>;
+    });
+  }
+
+  // Same occupant-handling panel for all three "land on a bus position"
+  // event types -- see the destOccupant/destBus state above.
+  function renderDestOccupantPanel() {
+    if (!destOccupant) return null;
+    return (
+      <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: '0.5rem 0' }}>
+        {canElevated ? (
+          <>
+            <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+              <strong>{destPositionField}</strong> is occupied by <strong>{destOccupant.tyre_number}</strong>. It will be sent to Spare to make room:
+            </div>
+            <div className="field">
+              <label>{destOccupant.tyre_number} &mdash; Current NSD</label>
+              <div className="input-suffix-wrap">
+                <input type="number" step="0.01" min="0" max="25" value={destOccupantNsd} onChange={(e) => setDestOccupantNsd(e.target.value)} required />
+                <span className="input-suffix">mm</span>
+              </div>
+            </div>
+            <div className="field">
+              <label>{destOccupant.tyre_number} &mdash; Stored At</label>
+              <input value={destOccupantStoredAt} onChange={(e) => setDestOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
+            </div>
+          </>
+        ) : (
+          <div className="error-text" style={{ fontSize: '0.85rem' }}>
+            <strong>{destPositionField}</strong> is occupied by <strong>{destOccupant.tyre_number}</strong>. Sending a mounted tyre to Spare requires a Depot Manager or Administrator &mdash; choose a free position, or ask one to make this change.
+          </div>
+        )}
+      </div>
+    );
   }
 
   function renderTypeFields() {
@@ -406,13 +498,16 @@ export default function LogEventPage() {
               </select>
             </div>
             {fields.bus_id && (
-              <div className="field">
-                <label>Position</label>
-                <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
-                  <option value="">Select position</option>
-                  {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
+              <>
+                <div className="field">
+                  <label>Position</label>
+                  <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
+                    <option value="">Select position</option>
+                    {renderDestPositionOptions()}
+                  </select>
+                </div>
+                {renderDestOccupantPanel()}
+              </>
             )}
           </>
         );
@@ -430,9 +525,10 @@ export default function LogEventPage() {
               <label>Destination Position</label>
               <select value={fields.to_position || ''} onChange={(e) => set('to_position', e.target.value)} required disabled={!fields.to_bus_id}>
                 <option value="">Select position</option>
-                {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                {renderDestPositionOptions()}
               </select>
             </div>
+            {renderDestOccupantPanel()}
             <div className="field">
               <label>Reason</label>
               <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. fleet rebalancing" />
@@ -473,9 +569,10 @@ export default function LogEventPage() {
               <label>Position</label>
               <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required disabled={!fields.bus_id}>
                 <option value="">Select position</option>
-                {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
+                {renderDestPositionOptions()}
               </select>
             </div>
+            {renderDestOccupantPanel()}
             <div className="field">
               <label>Odometer Reading (km)</label>
               <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
@@ -762,7 +859,7 @@ export default function LogEventPage() {
               <CheckCircle2 size={16} /> <span>{message}</span>
             </div>
           )}
-          <button type="submit">Log Event</button>
+          <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Log Event'}</button>
         </form>
       </div>
     </div>

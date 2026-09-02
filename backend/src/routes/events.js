@@ -34,6 +34,17 @@ function handleEventError(err, res) {
   if (err instanceof ApiError) {
     return res.status(err.status).json({ error: err.message });
   }
+  // Belt-and-suspenders against the tyres_position_unique DB constraint
+  // (db.js) -- the application-level occupancy checks earlier in
+  // tyreEvents.js are a courtesy that catches the common case with a nice
+  // message; this is the actual guarantee for the rare case where two
+  // requests raced past those checks concurrently (see db.js's comment on
+  // the constraint for why that's possible under READ COMMITTED). Whoever
+  // loses the race gets a real, if less specific, explanation instead of a
+  // raw Postgres constraint-violation message.
+  if (err.code === db.PG_ERRORS.UNIQUE_VIOLATION && err.constraint === 'tyres_position_unique') {
+    return res.status(409).json({ error: 'That position was just taken by another tyre. Refresh and try again.' });
+  }
   throw err;
 }
 

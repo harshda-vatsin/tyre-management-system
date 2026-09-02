@@ -4,6 +4,8 @@ import React, { useEffect, useState } from 'react';
 import Modal from './Modal.jsx';
 import { api } from '../lib/api.js';
 import { EVENT_TYPE_LABELS } from '../lib/tyreLifecycle.js';
+import { useAuth } from './AuthContext.jsx';
+import { ROLES } from '../lib/roles.js';
 
 // Tyre-scoped quick actions on the tyre detail page. Previously every event
 // type could only be logged from the separate /log-event page; this covers
@@ -15,6 +17,9 @@ import { EVENT_TYPE_LABELS } from '../lib/tyreLifecycle.js';
 // below is labeled "Scrap" in the UI (see lib/tyreLifecycle.js) -- it
 // absorbed the old separate 'scrap' event type's paperwork fields.
 export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) {
+  const { user } = useAuth();
+  const canElevated = [ROLES.ADMIN, ROLES.DEPOT_MANAGER].includes(user?.role);
+
   const [fields, setFields] = useState({});
   const [busPositions, setBusPositions] = useState([]);
   const [destBuses, setDestBuses] = useState([]);
@@ -35,6 +40,16 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
   const [occupantNsd, setOccupantNsd] = useState('');
   const [occupantStoredAt, setOccupantStoredAt] = useState('');
 
+  // Puncture Repair's optional remount, target-occupancy handling: same
+  // "send the resident tyre to Spare inline" pattern as rotation above, but
+  // (like Log Event's Fitment/Transfer forms) there's only one thing to do
+  // with an occupant here, not three -- see displaceOccupantIfAny in
+  // tyreEvents.js. Gated to Admin/Depot Manager since it's really a Send to
+  // Store happening inline and puncture_repair itself isn't elevated.
+  const [remountBus, setRemountBus] = useState(null);
+  const [remountOccupantNsd, setRemountOccupantNsd] = useState('');
+  const [remountOccupantStoredAt, setRemountOccupantStoredAt] = useState('');
+
   useEffect(() => {
     if (eventType === 'rotation' && tyre.current_bus_id) {
       api.get(`/buses/${tyre.current_bus_id}`).then((b) => { setBusPositions(b.position_labels || []); setBus(b); });
@@ -46,14 +61,18 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
 
   useEffect(() => {
     if (fields.bus_id) {
-      api.get(`/buses/${fields.bus_id}`).then((b) => setDestPositions(b.position_labels || []));
+      api.get(`/buses/${fields.bus_id}`).then((b) => { setDestPositions(b.position_labels || []); setRemountBus(b); });
     } else {
       setDestPositions([]);
+      setRemountBus(null);
     }
   }, [fields.bus_id]);
 
   const occupant = (bus?.tyre_position_map || []).find((s) => s.position === fields.to_position)?.tyre || null;
   const emptyPositions = busPositions.filter((p) => p !== tyre.current_position && !(bus?.tyre_position_map || []).find((s) => s.position === p)?.tyre);
+  const remountOccupant = eventType === 'puncture_repair'
+    ? (remountBus?.tyre_position_map || []).find((s) => s.position === fields.position)?.tyre || null
+    : null;
 
   useEffect(() => {
     setOccupantMode('swap');
@@ -63,6 +82,24 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fields.to_position]);
 
+  useEffect(() => {
+    setRemountOccupantNsd(remountOccupant?.last_nsd_value != null ? String(remountOccupant.last_nsd_value) : '');
+    setRemountOccupantStoredAt(remountBus?.depot_name ? `${remountBus.depot_name} Store` : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.position]);
+
+  useEffect(() => {
+    setFields((f) => {
+      if (!remountOccupant) {
+        if (f.displace_nsd_value === undefined && f.displace_stored_at === undefined) return f;
+        const { displace_nsd_value, displace_stored_at, displace_reason, ...rest } = f;
+        return rest;
+      }
+      return { ...f, displace_nsd_value: remountOccupantNsd, displace_stored_at: remountOccupantStoredAt };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remountOccupant, remountOccupantNsd, remountOccupantStoredAt]);
+
   function set(key, value) {
     setFields((f) => ({ ...f, [key]: value }));
   }
@@ -70,6 +107,10 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    if (remountOccupant && !canElevated) {
+      setError(`Position ${fields.position} is occupied by ${remountOccupant.tyre_number}. Sending a mounted tyre to Spare requires a Depot Manager or Administrator.`);
+      return;
+    }
     setSaving(true);
     try {
       if (eventType === 'rotation' && occupant) {
@@ -256,13 +297,44 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
               </select>
             </div>
             {fields.bus_id && (
-              <div className="field">
-                <label>Position</label>
-                <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
-                  <option value="">Select position</option>
-                  {destPositions.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
+              <>
+                <div className="field">
+                  <label>Position</label>
+                  <select value={fields.position || ''} onChange={(e) => set('position', e.target.value)} required>
+                    <option value="">Select position</option>
+                    {destPositions.map((p) => {
+                      const occ = (remountBus?.tyre_position_map || []).find((s) => s.position === p)?.tyre;
+                      return <option key={p} value={p}>{p}{occ ? ` (occupied by ${occ.tyre_number})` : ''}</option>;
+                    })}
+                  </select>
+                </div>
+                {remountOccupant && (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: '0.5rem 0' }}>
+                    {canElevated ? (
+                      <>
+                        <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                          <strong>{fields.position}</strong> is occupied by <strong>{remountOccupant.tyre_number}</strong>. It will be sent to Spare to make room:
+                        </div>
+                        <div className="field">
+                          <label>{remountOccupant.tyre_number} &mdash; Current NSD</label>
+                          <div className="input-suffix-wrap">
+                            <input type="number" step="0.01" min="0" max="25" value={remountOccupantNsd} onChange={(e) => setRemountOccupantNsd(e.target.value)} required />
+                            <span className="input-suffix">mm</span>
+                          </div>
+                        </div>
+                        <div className="field">
+                          <label>{remountOccupant.tyre_number} &mdash; Stored At</label>
+                          <input value={remountOccupantStoredAt} onChange={(e) => setRemountOccupantStoredAt(e.target.value)} placeholder="e.g. Depot Store Bay 2" required />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="error-text" style={{ fontSize: '0.85rem' }}>
+                        <strong>{fields.position}</strong> is occupied by <strong>{remountOccupant.tyre_number}</strong>. Sending a mounted tyre to Spare requires a Depot Manager or Administrator &mdash; choose a free position, or leave this remount blank.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </>
         );

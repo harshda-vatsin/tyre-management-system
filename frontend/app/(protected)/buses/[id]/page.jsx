@@ -14,6 +14,7 @@ import Modal from '../../../../components/Modal.jsx';
 import PageHeader from '../../../../components/PageHeader.jsx';
 import LoadingState from '../../../../components/LoadingState.jsx';
 import BusTyreDiagram from '../../../../components/BusTyreDiagram.jsx';
+import MountTyreModal from '../../../../components/MountTyreModal.jsx';
 
 const STATUS_BADGE = { Active: 'badge-success', 'Under Maintenance': 'badge-warning', Decommissioned: 'badge-critical' };
 
@@ -22,6 +23,7 @@ export default function BusDetailPage() {
   const { user } = useAuth();
   const { pressureUnit } = useSettings();
   const canTransfer = user?.role === ROLES.ADMIN || user?.role === ROLES.NATIONAL_FLEET_MANAGER;
+  const canMount = [ROLES.ADMIN, ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR].includes(user?.role);
 
   const [bus, setBus] = useState(null);
   const [depots, setDepots] = useState([]);
@@ -30,6 +32,8 @@ export default function BusDetailPage() {
   const [transferDepotId, setTransferDepotId] = useState('');
   const [transferNotes, setTransferNotes] = useState('');
   const [transferError, setTransferError] = useState('');
+  const [mountMode, setMountMode] = useState(false);
+  const [mountSlot, setMountSlot] = useState(null);
 
   async function load() {
     setError('');
@@ -61,7 +65,25 @@ export default function BusDetailPage() {
     }
   }
 
+  // In mount-picking mode the whole diagram becomes a position picker (same
+  // technique as Log Event's Replacement flow, renderReplacementSlot) --
+  // every slot, empty or occupied, is a button that opens MountTyreModal for
+  // that position instead of navigating. Default mode is untouched: occupied
+  // slots stay a plain Link to the tyre detail page.
   function renderPositionSlot(slot) {
+    if (mountMode) {
+      return (
+        <button
+          type="button"
+          key={slot.position}
+          className={`bus-diagram-tyre${slot.tyre ? '' : ' empty'}`}
+          onClick={() => { setMountSlot({ position: slot.position, occupant: slot.tyre || null }); setMountMode(false); }}
+        >
+          <span className="position-code">{slot.position}</span>
+          {slot.tyre ? <span className="tyre-number">{slot.tyre.tyre_number}</span> : <span className="reading-summary">Empty</span>}
+        </button>
+      );
+    }
     if (!slot.tyre) {
       return (
         <div key={slot.position} className="bus-diagram-tyre empty">
@@ -113,7 +135,21 @@ export default function BusDetailPage() {
       </div>
 
       <div className="card">
-        <div className="card-title-row"><h3>Bus Layout</h3></div>
+        <div className="card-title-row">
+          <h3>Bus Layout</h3>
+          {canMount && (
+            mountMode ? (
+              <button className="secondary" onClick={() => setMountMode(false)}>Cancel</button>
+            ) : (
+              <button className="secondary" onClick={() => setMountMode(true)}>Mount Tyre</button>
+            )
+          )}
+        </div>
+        {mountMode && (
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '-0.25rem' }}>
+            Click a position below to mount a tyre there. An occupied position sends its current tyre to Spare first.
+          </p>
+        )}
         <BusTyreDiagram positionMap={bus.tyre_position_map} renderTyre={renderPositionSlot} />
       </div>
 
@@ -178,6 +214,16 @@ export default function BusDetailPage() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {mountSlot && (
+        <MountTyreModal
+          bus={bus}
+          position={mountSlot.position}
+          occupant={mountSlot.occupant}
+          onClose={() => setMountSlot(null)}
+          onSaved={() => { setMountSlot(null); load(); }}
+        />
       )}
     </div>
   );

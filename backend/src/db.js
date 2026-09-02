@@ -934,6 +934,36 @@ const ready = (async () => {
     ));
   `);
 
+  // Enforces "at most one tyre per bus position" at the database itself,
+  // not just in application code. Every position-occupancy check in
+  // tyreEvents.js (assertPositionFree, findOccupant/displaceOccupantIfAny)
+  // is a plain SELECT before an UPDATE with no row lock -- under Postgres's
+  // default READ COMMITTED isolation, two concurrent requests (two users,
+  // or one user double-clicking Submit before the first response disables
+  // the button) can both pass that check before either commits, and both
+  // write, silently leaving two tyres both believing they're mounted at the
+  // same spot. This constraint is the actual guarantee; the application
+  // checks are just a courtesy that makes the common case fail with a nice
+  // message instead of a database round-trip.
+  //
+  // DEFERRABLE INITIALLY DEFERRED (checked at COMMIT, not per-statement) is
+  // required, not optional: a same-transaction position swap between two
+  // tyres (see createRotationSet) moves one tyre onto the other's position
+  // before the second tyre has vacated it, which would violate an immediate
+  // constraint even though the final layout is perfectly valid. A plain
+  // (non-partial) UNIQUE constraint is used rather than a partial index
+  // with a WHERE clause -- Postgres doesn't support deferrable partial
+  // indexes -- but that's fine here: NULL current_bus_id/current_position
+  // (every unmounted tyre -- In Store, Under Repair, Under Retread,
+  // Warranty, Scrapped) is never considered equal to another NULL for
+  // uniqueness purposes, so unmounted tyres never collide with each other.
+  // Safe to run unconditionally on every boot, same idiom as the
+  // constraints above: DROP IF EXISTS never fails, then re-ADD.
+  await exec(`
+    ALTER TABLE tyres DROP CONSTRAINT IF EXISTS tyres_position_unique;
+    ALTER TABLE tyres ADD CONSTRAINT tyres_position_unique UNIQUE (current_bus_id, current_position) DEFERRABLE INITIALLY DEFERRED;
+  `);
+
   // SRS §8.3: pressure unit defaults to PSI until an Admin changes it.
   // ON CONFLICT DO NOTHING is Postgres's equivalent of SQLite's INSERT OR IGNORE.
   await prepare('INSERT INTO system_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING').run(['pressure_unit', 'PSI']);

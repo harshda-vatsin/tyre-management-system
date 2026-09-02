@@ -85,7 +85,7 @@ export const EVENT_TYPES = [
   { value: 'send_to_repair', label: 'Send to Repair' },
   { value: 'puncture_repair', label: 'Repair Completed' },
   { value: 'inter_bus_transfer', label: 'Inter-Bus Transfer' },
-  { value: 'send_to_store', label: 'Sending to Store', elevated: true },
+  { value: 'send_to_store', label: 'Send to Store / Spare', elevated: true },
   // 'scrap' and 'scrap_disposal' were folded into this event type -- it now
   // carries their paperwork fields too, so there's no separate "Scrap" entry.
   { value: 'condemnation', label: 'Scrap', elevated: true },

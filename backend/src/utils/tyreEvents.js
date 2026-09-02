@@ -163,6 +163,52 @@ async function assertPositionFree(busId, position, excludeTyreId) {
   }
 }
 
+async function findOccupant(busId, position, excludeTyreId) {
+  return db
+    .prepare('SELECT * FROM tyres WHERE current_bus_id = ? AND current_position = ? AND id != ?')
+    .get(busId, position, excludeTyreId || 0);
+}
+
+// Shared by every "land a tyre on a bus position" event (fitment_created,
+// inter_bus_transfer, puncture_repair's remount) -- if that position is
+// occupied, sends the resident tyre to Spare (its own send_to_store event +
+// transition to In Store) so the caller's own mount/move can proceed in the
+// same transaction, instead of hard-blocking with a 409 and forcing a
+// separate trip. Gated to Admin/Depot Manager exactly like a standalone
+// Send to Store would be (ELEVATED_EVENT_TYPES) -- none of these three
+// events are elevated themselves, so without this check any Tyre Supervisor
+// could use "land on top of someone" as a backdoor around that permission.
+// Returns the displacement event, or null if the position was already free.
+async function displaceOccupantIfAny(user, bus, position, excludeTyreId, { event_date, odometer_km, displace_nsd_value, displace_stored_at, displace_reason, incomingTyreNumber }) {
+  const occupant = await findOccupant(bus.id, position, excludeTyreId);
+  if (!occupant) return null;
+
+  if (![ROLES.ADMIN, ROLES.DEPOT_MANAGER].includes(user.role)) {
+    throw new ApiError(403, `Position ${position} is occupied by tyre ${occupant.tyre_number} -- sending it to Spare requires Depot Manager or Administrator`);
+  }
+  const nsdResult = validateNsd(displace_nsd_value);
+  if (!nsdResult.valid) throw new ApiError(400, `Displacing tyre ${occupant.tyre_number}: ${nsdResult.error}`);
+  if (!displace_stored_at) throw new ApiError(400, `stored_at is required to send tyre ${occupant.tyre_number} to Spare`);
+
+  const displaceEvent = await insertEventRow({
+    tyre_id: occupant.id,
+    event_type: 'send_to_store',
+    event_date: event_date || undefined,
+    depot_id: occupant.current_depot_id,
+    from_bus_id: bus.id,
+    from_position: occupant.current_position,
+    nsd_value: nsdResult.value,
+    odometer_km: odometer_km ?? null,
+    reason: displace_reason || `Displaced from ${position}${incomingTyreNumber ? ` to fit tyre ${incomingTyreNumber}` : ''}`,
+    stored_at: displace_stored_at,
+    performed_by: user.id,
+  });
+  const displaceResult = await transitionTyreStatus(occupant.id, 'In Store', { current_bus_id: null, current_position: null });
+  await auditTyreMutation(user, displaceResult.before, displaceResult.after);
+  await auditTyreEvent(user, displaceEvent);
+  return displaceEvent;
+}
+
 function auditTyreEvent(user, event) {
   return writeAuditLog({ user, action: 'CREATE', entityType: 'tyre_event', entityId: event.id, after: event });
 }
@@ -543,7 +589,7 @@ async function createReplacement(user, { tyre_id, new_tyre_id, reason, odometer_
 // so bus_id/position here are an optional immediate remount, not an echo of
 // from_bus_id. Left blank, the tyre lands In Store exactly as before, free
 // to be fitted later via fitment_created same as any other stored tyre.
-async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date, bus_id, position }) {
+async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date, bus_id, position, displace_nsd_value, displace_stored_at, displace_reason }) {
   const tyre = await getTyre(tyre_id);
   if (!['plug', 'patch', 'tube'].includes(repair_type)) {
     throw new ApiError(400, 'repair_type must be one of: plug, patch, tube');
@@ -551,6 +597,7 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
   assertDepotScope(user, tyre.current_depot_id);
 
   let remountBus = null;
+  const events = [];
   if (bus_id) {
     if (!position) throw new ApiError(400, 'position is required to remount onto a bus');
     remountBus = await getBus(bus_id);
@@ -559,7 +606,12 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
     if (!positions.includes(position)) {
       throw new ApiError(400, `position must be one of: ${positions.join(', ')}`);
     }
-    await assertPositionFree(remountBus.id, position, tyre.id);
+    // If position is already occupied, may displace the resident tyre to
+    // Spare as part of this same remount -- see displaceOccupantIfAny.
+    const displaceEvent = await displaceOccupantIfAny(user, remountBus, position, tyre.id, {
+      event_date, odometer_km, displace_nsd_value, displace_stored_at, displace_reason, incomingTyreNumber: tyre.tyre_number,
+    });
+    if (displaceEvent) events.push(displaceEvent);
   } else if (position) {
     throw new ApiError(400, 'bus_id is required to remount onto a bus');
   }
@@ -592,7 +644,8 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(remountBus ? remountBus.id : before.current_bus_id, odometer_km);
-  return [event];
+  events.push(event);
+  return events;
 }
 
 // "Send to Repair" -- the first half of the repair workflow. Pulls the tyre
@@ -624,7 +677,10 @@ async function createSendToRepair(user, { tyre_id, reason, odometer_km, nsd_valu
   return [event];
 }
 
-async function createInterBusTransfer(user, { tyre_id, to_bus_id, to_position, reason, event_date }) {
+// If to_position is already occupied on the destination bus, the caller may
+// supply displace_nsd_value/displace_stored_at to send the resident tyre to
+// Spare as part of this same transfer -- see displaceOccupantIfAny.
+async function createInterBusTransfer(user, { tyre_id, to_bus_id, to_position, reason, event_date, odometer_km, displace_nsd_value, displace_stored_at, displace_reason }) {
   const tyre = await getTyre(tyre_id);
   if (!tyre.current_bus_id) throw new ApiError(400, 'Tyre must be mounted on a bus to transfer');
   if (!to_bus_id || !to_position) throw new ApiError(400, 'to_bus_id and to_position are required');
@@ -643,7 +699,12 @@ async function createInterBusTransfer(user, { tyre_id, to_bus_id, to_position, r
   if (!positions.includes(to_position)) {
     throw new ApiError(400, `to_position must be one of: ${positions.join(', ')}`);
   }
-  await assertPositionFree(toBus.id, to_position, tyre.id);
+
+  const events = [];
+  const displaceEvent = await displaceOccupantIfAny(user, toBus, to_position, tyre.id, {
+    event_date, odometer_km, displace_nsd_value, displace_stored_at, displace_reason, incomingTyreNumber: tyre.tyre_number,
+  });
+  if (displaceEvent) events.push(displaceEvent);
 
   const event = await insertEventRow({
     tyre_id: tyre.id,
@@ -667,7 +728,8 @@ async function createInterBusTransfer(user, { tyre_id, to_bus_id, to_position, r
   });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
-  return [event];
+  events.push(event);
+  return events;
 }
 
 async function createSendToStore(user, { tyre_id, reason, nsd_value, stored_at, odometer_km, event_date }) {
@@ -768,7 +830,16 @@ async function createPurchaseIntake(user, { tyre_id, notes, vendor_name, gate_pa
 // Mounts a tyre from In Store onto a bus position, taking it straight to
 // Active (mounted and running) -- there's no separate transitional "just
 // mounted, not yet running" status in the simplified model.
-async function createFitmentCreated(user, { tyre_id, bus_id, position, reason, odometer_km, event_date }) {
+//
+// If the target position is already occupied, the caller may supply
+// displace_nsd_value/displace_stored_at to send the resident tyre to Spare
+// as part of this same call (writing its own send_to_store event) rather
+// than requiring a separate Send to Store trip first. That displacement is
+// gated to Admin/Depot Manager exactly like a standalone Send to Store
+// would be (ELEVATED_EVENT_TYPES) -- fitment_created itself isn't elevated,
+// so without this check a Tyre Supervisor could use "mount over" as a
+// backdoor around that permission.
+async function createFitmentCreated(user, { tyre_id, bus_id, position, reason, odometer_km, event_date, displace_nsd_value, displace_stored_at, displace_reason }) {
   const tyre = await getTyre(tyre_id);
   if (tyre.current_bus_id) throw new ApiError(400, 'Tyre is already mounted on a bus');
   if (!bus_id || !position) throw new ApiError(400, 'bus_id and position are required');
@@ -779,7 +850,12 @@ async function createFitmentCreated(user, { tyre_id, bus_id, position, reason, o
   if (!positions.includes(position)) {
     throw new ApiError(400, `position must be one of: ${positions.join(', ')}`);
   }
-  await assertPositionFree(bus.id, position, tyre.id);
+
+  const events = [];
+  const displaceEvent = await displaceOccupantIfAny(user, bus, position, tyre.id, {
+    event_date, odometer_km, displace_nsd_value, displace_stored_at, displace_reason, incomingTyreNumber: tyre.tyre_number,
+  });
+  if (displaceEvent) events.push(displaceEvent);
 
   const event = await insertEventRow({
     tyre_id: tyre.id,
@@ -802,7 +878,8 @@ async function createFitmentCreated(user, { tyre_id, bus_id, position, reason, o
   await maybeUpdateBusOdometer(bus.id, odometer_km);
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
-  return [event];
+  events.push(event);
+  return events;
 }
 
 // Retained for historical rows and API compatibility, but no longer moves
