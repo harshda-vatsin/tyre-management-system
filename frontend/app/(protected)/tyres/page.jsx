@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Plus, CircleDot, UploadCloud } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
@@ -48,6 +49,7 @@ function emptyForm(defaultDepotId) {
 
 export default function TyresPage() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
   const canWrite = user?.role === ROLES.ADMIN || user?.role === ROLES.DEPOT_MANAGER;
   const isFleetWide = FLEET_WIDE_ROLES.includes(user?.role);
 
@@ -59,7 +61,12 @@ export default function TyresPage() {
   const [error, setError] = useState('');
 
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: '', depot_id: '', brand: '' });
+  // Supports deep-linking from dashboard drill-downs (e.g. /tyres?status=Active).
+  const [filters, setFilters] = useState({
+    status: searchParams.get('status') || '',
+    depot_id: searchParams.get('depot_id') || '',
+    brand: '',
+  });
 
   const [depots, setDepots] = useState([]);
   const [buses, setBuses] = useState([]);

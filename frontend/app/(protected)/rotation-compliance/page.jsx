@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, Clock, AlertOctagon, Gauge } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { FLEET_WIDE_ROLES } from '../../../lib/roles.js';
@@ -23,6 +24,7 @@ const STATUS_BADGE_CLASS = { 'On Time': 'badge-success', Due: 'badge-warning', O
 // by rotationService.computeRotationCompliance.
 export default function RotationCompliancePage() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
   const isFleetWide = FLEET_WIDE_ROLES.includes(user?.role);
 
   const [rows, setRows] = useState([]);
@@ -35,7 +37,11 @@ export default function RotationCompliancePage() {
   const [summary, setSummary] = useState(null);
 
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: 'Due', depot_id: '' });
+  // Supports deep-linking from dashboard drill-downs (e.g. /rotation-compliance?depot_id=3).
+  const [filters, setFilters] = useState({
+    status: searchParams.get('status') || 'Due',
+    depot_id: searchParams.get('depot_id') || '',
+  });
   const [depots, setDepots] = useState([]);
 
   async function load() {

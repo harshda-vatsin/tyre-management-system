@@ -1002,6 +1002,26 @@ tr.row-accent-critical td:first-child {
   border-radius: var(--radius-md);
 }
 
+.bar-chart-row-clickable:hover,
+.bar-chart-row-clickable:focus-visible {
+  background: var(--surface-muted);
+  outline: none;
+}
+
+.stat-card-clickable {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.stat-card-clickable:hover,
+.stat-card-clickable:focus-visible {
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.08));
+  transform: translateY(-1px);
+  outline: none;
+}
+
 /* Lifecycle macro-stage progress bar */
 .lifecycle-progress-bar {
   display: flex;

@@ -47,7 +47,7 @@ export default function AdminThresholdsPage() {
     setLoading(true);
     setError('');
     try {
-      const [t, d, m] = await Promise.all([api.get('/thresholds'), api.get('/depots'), api.get('/bus-models')]);
+      const [t, d, m] = await Promise.all([api.get('/thresholds?is_active=true'), api.get('/depots'), api.get('/bus-models')]);
       setThresholds(t);
       setDepots(d);
       setBusModels(m);
@@ -90,20 +90,32 @@ export default function AdminThresholdsPage() {
     setNewForm(emptyValueForm(PARAMETER_INFO[paramType]));
   }
 
+  // Opens the "new" form pre-set to create a missing GLOBAL default threshold.
+  function startNewGlobal(paramType) {
+    setNewParam(paramType);
+    setNewScopeId('__GLOBAL__');
+    setNewForm(emptyValueForm(PARAMETER_INFO[paramType]));
+  }
+
   async function saveNew(e) {
     e.preventDefault();
     setError('');
     try {
-      const scopeType = PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL');
+      // If newScopeId is '__GLOBAL__' it means we're creating a missing global default.
+      const isGlobal = newScopeId === '__GLOBAL__';
+      const scopeType = isGlobal
+        ? 'GLOBAL'
+        : PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL');
       const payload = {
         parameter_type: newParam,
         scope_type: scopeType,
-        scope_id: Number(newScopeId),
+        ...(isGlobal ? {} : { scope_id: Number(newScopeId) }),
         ...Object.fromEntries(Object.entries(newForm).map(([k, v]) => [k, v === '' || k === 'unit' ? v : Number(v)])),
       };
       await api.post('/thresholds', payload);
       setNewParam('');
       setNewForm(null);
+      setNewScopeId('');
       await load();
     } catch (err) {
       setError(err.message);
@@ -178,7 +190,7 @@ export default function AdminThresholdsPage() {
           <div className="card" key={paramType}>
             <div className="card-title-row"><h3>{info.label}</h3></div>
 
-            {globalRow && (
+            {globalRow ? (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0.9rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-md)', marginBottom: overrideRows.length ? '0.75rem' : 0 }}>
                 <div>
                   <span className="badge badge-info" style={{ marginRight: '0.5rem' }}>Global Default</span>
@@ -187,6 +199,15 @@ export default function AdminThresholdsPage() {
                 {canWrite && (
                   <button className="secondary" style={{ padding: '0.3rem 0.7rem', fontSize: '0.78rem' }} onClick={() => startEdit(globalRow)}>Edit</button>
                 )}
+              </div>
+            ) : canWrite ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.9rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-md)', marginBottom: overrideRows.length ? '0.75rem' : 0 }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No global default set.</span>
+                <button className="secondary" style={{ padding: '0.3rem 0.7rem', fontSize: '0.78rem' }} onClick={() => startNewGlobal(paramType)}>Create Global Default</button>
+              </div>
+            ) : (
+              <div style={{ padding: '0.6rem 0.9rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-md)', marginBottom: overrideRows.length ? '0.75rem' : 0 }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No global default configured.</span>
               </div>
             )}
 
@@ -246,21 +267,30 @@ export default function AdminThresholdsPage() {
       )}
 
       {newParam && (
-        <Modal title={`Add ${PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'} Override: ${PARAMETER_INFO[newParam].label}`} onClose={() => setNewParam('')}>
+        <Modal
+          title={
+            newScopeId === '__GLOBAL__'
+              ? `Create Global Default: ${PARAMETER_INFO[newParam].label}`
+              : `Add ${PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'} Override: ${PARAMETER_INFO[newParam].label}`
+          }
+          onClose={() => { setNewParam(''); setNewScopeId(''); }}
+        >
           <form onSubmit={saveNew}>
-            <div className="field">
-              <label>{PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'}</label>
-              <select value={newScopeId} onChange={(e) => setNewScopeId(e.target.value)} required>
-                <option value="">Select</option>
-                {(PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? depots : busModels)
-                  .filter((s) => !thresholds.some((t) => t.parameter_type === newParam && t.scope_id === s.id))
-                  .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+            {newScopeId !== '__GLOBAL__' && (
+              <div className="field">
+                <label>{PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? 'Depot' : 'Bus Model'}</label>
+                <select value={newScopeId} onChange={(e) => setNewScopeId(e.target.value)} required>
+                  <option value="">Select</option>
+                  {(PARAMETER_INFO[newParam].scopes.find((s) => s !== 'GLOBAL') === 'DEPOT' ? depots : busModels)
+                    .filter((s) => !thresholds.some((t) => t.parameter_type === newParam && t.scope_id === s.id))
+                    .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            )}
             {renderValueFields(PARAMETER_INFO[newParam], newForm, setNewForm)}
             <div className="form-actions">
-              <button type="submit">Add Override</button>
-              <button type="button" className="secondary" onClick={() => setNewParam('')}>Cancel</button>
+              <button type="submit">{newScopeId === '__GLOBAL__' ? 'Create Global Default' : 'Add Override'}</button>
+              <button type="button" className="secondary" onClick={() => { setNewParam(''); setNewScopeId(''); }}>Cancel</button>
             </div>
           </form>
         </Modal>

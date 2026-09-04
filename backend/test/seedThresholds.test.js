@@ -20,12 +20,12 @@ test.after(async () => {
   await dropTestDb();
 });
 
-test('seedThresholds: creates the 4 default GLOBAL thresholds on an empty table', async () => {
+test('seedThresholds: creates the 5 default GLOBAL thresholds on an empty table', async () => {
   const results = await seedThresholds();
-  assert.deepEqual(results.map((r) => r.action), ['created', 'created', 'created', 'created']);
+  assert.deepEqual(results.map((r) => r.action), ['created', 'created', 'created', 'created', 'created']);
 
   const rows = await db.prepare("SELECT parameter_type FROM thresholds WHERE scope_type = 'GLOBAL' AND is_active = 1 ORDER BY parameter_type").all();
-  assert.deepEqual(rows.map((r) => r.parameter_type).sort(), ['ESCALATION_DAYS', 'INSPECTION_INTERVAL', 'NSD', 'PRESSURE']);
+  assert.deepEqual(rows.map((r) => r.parameter_type).sort(), ['ESCALATION_DAYS', 'NSD', 'NSD_INSPECTION_INTERVAL', 'PRESSURE', 'PRESSURE_INSPECTION_INTERVAL']);
 
   const nsd = await db.prepare("SELECT * FROM thresholds WHERE parameter_type = 'NSD' AND scope_type = 'GLOBAL' AND is_active = 1").get();
   assert.equal(nsd.warning_max, 4);
@@ -35,11 +35,11 @@ test('seedThresholds: creates the 4 default GLOBAL thresholds on an empty table'
 test('seedThresholds: running it again is a no-op, never creates duplicates', async () => {
   const results = await seedThresholds();
   assert.deepEqual(results.map((r) => r.action), [
-    'skipped (already exists)', 'skipped (already exists)', 'skipped (already exists)', 'skipped (already exists)',
+    'skipped (already exists)', 'skipped (already exists)', 'skipped (already exists)', 'skipped (already exists)', 'skipped (already exists)',
   ]);
 
   const count = (await db.prepare("SELECT COUNT(*) c FROM thresholds WHERE scope_type = 'GLOBAL' AND is_active = 1").get()).c;
-  assert.equal(count, 4);
+  assert.equal(count, 5);
 });
 
 test('seedThresholds: does not touch unrelated tables', async () => {

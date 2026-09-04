@@ -9,11 +9,13 @@ import BarChart from './BarChart.jsx';
 import PageHeader from './PageHeader.jsx';
 import EmptyState from './EmptyState.jsx';
 import LoadingState from './LoadingState.jsx';
+import TyreStatusListModal from './TyreStatusListModal.jsx';
 import { TYRE_STATUS_COLORS, ALERT_SEVERITY_COLORS } from '../lib/dashboardColors.js';
 
 export default function NationalDashboard({ onDrillDown }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [statusModalTarget, setStatusModalTarget] = useState(null);
 
   useEffect(() => {
     api.get('/dashboard/national').then(setData).catch((err) => setError(err.message));
@@ -43,20 +45,20 @@ export default function NationalDashboard({ onDrillDown }) {
       </div>
 
       <div className="stat-grid">
-        <StatCard label="Repair Queue" value={data.lifecycle_group_counts.repair_queue} accent="#eda100" icon={Wrench} />
-        <StatCard label="At Retread Vendor" value={data.lifecycle_group_counts.at_vendor} accent="#eda100" icon={Truck} />
+        <StatCard label="Repair Queue" value={data.lifecycle_group_counts.repair_queue} accent="#eda100" icon={Wrench} onClick={data.lifecycle_group_counts.repair_queue > 0 ? () => setStatusModalTarget('Under Repair') : undefined} />
+        <StatCard label="At Retread Vendor" value={data.lifecycle_group_counts.at_vendor} accent="#eda100" icon={Truck} onClick={data.lifecycle_group_counts.at_vendor > 0 ? () => setStatusModalTarget('Under Retread') : undefined} />
         <StatCard label="Retreaded (Lifetime)" value={data.lifecycle_group_counts.retreaded_total} accent="#1baf7a" icon={RefreshCw} />
-        <StatCard label="Rotation Due/Overdue" value={data.rotation_counts.due + data.rotation_counts.overdue} accent="#eda100" icon={RotateCw} />
-        <StatCard label="NSD Critical" value={data.alert_counts_by_parameter.NSD.Critical} accent="#e34948" icon={AlertTriangle} />
-        <StatCard label="Pressure Critical" value={data.alert_counts_by_parameter.PRESSURE.Critical} accent="#e34948" icon={AlertTriangle} />
-        <StatCard label="Warranty Pending" value={data.lifecycle_group_counts.warranty_pending} accent="#1d4ed8" icon={FileWarning} />
-        <StatCard label="Scrapped" value={data.lifecycle_group_counts.scrapped} accent="#b3261e" icon={Trash2} />
+        <StatCard label="Rotation Due/Overdue" value={data.rotation_counts.due + data.rotation_counts.overdue} accent="#eda100" icon={RotateCw} href={data.rotation_counts.due + data.rotation_counts.overdue > 0 ? '/rotation-compliance' : undefined} />
+        <StatCard label="NSD Critical" value={data.alert_counts_by_parameter.NSD.Critical} accent="#e34948" icon={AlertTriangle} href={data.alert_counts_by_parameter.NSD.Critical > 0 ? '/alerts?parameter_type=NSD&severity=Critical&status=Open' : undefined} />
+        <StatCard label="Pressure Critical" value={data.alert_counts_by_parameter.PRESSURE.Critical} accent="#e34948" icon={AlertTriangle} href={data.alert_counts_by_parameter.PRESSURE.Critical > 0 ? '/alerts?parameter_type=PRESSURE&severity=Critical&status=Open' : undefined} />
+        <StatCard label="Warranty Pending" value={data.lifecycle_group_counts.warranty_pending} accent="#1d4ed8" icon={FileWarning} onClick={data.lifecycle_group_counts.warranty_pending > 0 ? () => setStatusModalTarget('Warranty') : undefined} />
+        <StatCard label="Scrapped" value={data.lifecycle_group_counts.scrapped} accent="#b3261e" icon={Trash2} onClick={data.lifecycle_group_counts.scrapped > 0 ? () => setStatusModalTarget('Scrapped') : undefined} />
       </div>
 
       <div className="grid-2col">
         <div className="card">
           <div className="card-title-row"><h3>Tyres by Status</h3></div>
-          <BarChart data={tyreStatusData} />
+          <BarChart data={tyreStatusData} onBarClick={(d) => setStatusModalTarget(d.label)} />
         </div>
         <div className="card">
           <div className="card-title-row"><h3>Active Alerts by Severity</h3></div>
@@ -159,6 +161,10 @@ export default function NationalDashboard({ onDrillDown }) {
           </div>
         )}
       </div>
+
+      {statusModalTarget && (
+        <TyreStatusListModal status={statusModalTarget} onClose={() => setStatusModalTarget(null)} />
+      )}
     </div>
   );
 }
