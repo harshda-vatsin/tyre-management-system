@@ -13,7 +13,7 @@ const { validateNsd, validatePressure } = require('./readingValidation');
 const { evaluateNsd, evaluatePressure } = require('./thresholdEngine');
 const { applyReadingEvaluation } = require('./alertService');
 const { ROLES } = require('./roles');
-const { transitionTyreStatus } = require('./lifecycleStateMachine');
+const { transitionTyreStatus, reactivateTyre } = require('./lifecycleStateMachine');
 const { ApiError } = require('./apiError');
 const { EVENT_OUTCOMES } = require('./tyreLifecycle');
 
@@ -21,8 +21,9 @@ const DEPOT_SCOPED_ROLES = [ROLES.DEPOT_MANAGER, ROLES.TYRE_SUPERVISOR];
 // Condemnation ("Scrap" in the UI) and Send-to-Store are service-removal
 // actions; SRS UC-13 assigns Condemn explicitly to Depot Manager (not Tyre
 // Supervisor), and Send-to-Store is treated the same way by analogy since
-// it's the same class of action.
-const ELEVATED_EVENT_TYPES = ['send_to_store', 'condemnation'];
+// it's the same class of action. Reactivation (reversing a Scrap) is held to
+// the same authority as the Scrap it undoes.
+const ELEVATED_EVENT_TYPES = ['send_to_store', 'condemnation', 'reactivation'];
 
 // Tyre Card Amendment workflow: which tyre_events columns may be corrected
 // per event_type. Deliberately excludes structural/relational fields (bus_id,
@@ -48,6 +49,7 @@ const AMENDABLE_FIELDS = {
   retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose'],
   retread_completed: ['vendor_name', 'vendor_location', 'retread_cost', 'invoice_no', 'invoice_date', 'notes', 'outcome', 'reason'],
   warranty_claim: ['reason', 'notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'vendor_location'],
+  reactivation: ['reason'],
 };
 
 // COALESCE(@event_date, NOW_SQL): binding an explicit NULL parameter
@@ -275,6 +277,8 @@ function createTyreEvent(user, eventType, payload) {
             return createRetreadCompleted(user, payload);
           case 'warranty_claim':
             return createWarrantyClaim(user, payload);
+          case 'reactivation':
+            return createReactivation(user, payload);
           default:
             throw new ApiError(400, `Unknown event_type: ${eventType}`);
         }
@@ -799,6 +803,32 @@ async function createCondemnation(user, { tyre_id, reason, nsd_value, odometer_k
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
+  return [event];
+}
+
+// Reverses a condemnation: brings a Scrapped tyre back to In Store so it can
+// be fitted again through the normal fitment_created flow. Uses
+// reactivateTyre() rather than transitionTyreStatus() -- see that function's
+// comment in lifecycleStateMachine.js for why Scrapped stays a dead end in
+// the generic transition graph even though this one explicit, audited path
+// out of it exists.
+async function createReactivation(user, { tyre_id, reason, event_date }) {
+  const tyre = await getTyre(tyre_id);
+  if (!reason) throw new ApiError(400, 'reason is required');
+  assertDepotScope(user, tyre.current_depot_id);
+
+  const event = await insertEventRow({
+    tyre_id: tyre.id,
+    event_type: 'reactivation',
+    event_date: event_date || undefined,
+    depot_id: tyre.current_depot_id,
+    reason,
+    performed_by: user.id,
+  });
+
+  const { before, after } = await reactivateTyre(tyre.id);
+  await auditTyreMutation(user, before, after);
+  await auditTyreEvent(user, event);
   return [event];
 }
 

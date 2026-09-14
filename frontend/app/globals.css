@@ -162,7 +162,8 @@ a {
   height: 100dvh;
   max-height: 100vh;
   max-height: 100dvh;
-  overflow-y: auto;
+  overflow: visible;
+  z-index: 50;
 }
 
 .sidebar-brand {
@@ -1764,15 +1765,28 @@ a.bus-diagram-tyre {
 
 .notification-dropdown {
   position: absolute;
-  width: 320px;
+  width: 340px;
+  max-width: min(340px, calc(100vw - 2rem));
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong, var(--border));
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: 100;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.22), 0 4px 12px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  animation: notification-pop 0.14s ease-out;
+}
+
+@keyframes notification-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* Position for mobile topbar (align to right, drop down) */
@@ -1782,9 +1796,9 @@ a.bus-diagram-tyre {
   transform-origin: top right;
 }
 
-/* Position for sidebar footer (align to left, drop up) */
+/* Position for sidebar footer (align to left of bell, drop up) */
 .sidebar-footer .notification-dropdown {
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 10px);
   left: 0;
   transform-origin: bottom left;
 }

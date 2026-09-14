@@ -96,6 +96,10 @@ export const EVENT_TYPES = [
   { value: 'retread_sent', label: 'Send to Retread' },
   { value: 'retread_completed', label: 'Retread Completed' },
   { value: 'warranty_claim', label: 'Warranty Claim' },
+  // Reverses a condemnation -- brings a Scrapped tyre back to In Store.
+  // Elevated to match condemnation's own permission level (Admin/Depot
+  // Manager), since it's undoing the same class of decision.
+  { value: 'reactivation', label: 'Reactivate (Un-scrap)', elevated: true },
 ];
 
 export const EVENT_TYPE_LABELS = Object.fromEntries(EVENT_TYPES.map((e) => [e.value, e.label]));
@@ -139,6 +143,8 @@ export function describeEvent(e, pressureUnit, formatPressure) {
       return `Retread completed by "${e.vendor_name || '-'}"${e.retread_cost != null ? `, cost ${e.retread_cost}` : ''}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'warranty_claim':
       return e.reason || 'Warranty claim update';
+    case 'reactivation':
+      return `Reactivated from Scrapped - ${e.reason}`;
     default:
       return '-';
   }

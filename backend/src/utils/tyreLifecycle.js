@@ -14,7 +14,13 @@
 const ALL_STATUSES = ['In Store', 'Active', 'Under Repair', 'Under Retread', 'Warranty', 'Scrapped'];
 
 // Scrapped is the only one-way door -- everything else is a normal location
-// or a temporary detour that always leads back to In Store/Active.
+// or a temporary detour that always leads back to In Store/Active. It stays
+// in this list (so the generic transition graph below and the master-data
+// PUT /tyres/:id route both still refuse to move a Scrapped tyre anywhere
+// silently) even though a Scrapped tyre CAN be brought back: reactivateTyre()
+// in lifecycleStateMachine.js is a deliberate, audited exception to this
+// list, reachable only through the 'reactivation' tyre_events entry -- never
+// through a raw status edit.
 const TERMINAL_STATUSES = ['Scrapped'];
 
 const LEGACY_STATUS_MAP = {
@@ -77,6 +83,7 @@ const EVENT_TYPES = [
   'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
   'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
   'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+  'reactivation',
 ];
 
 // Canonical outcome vocabulary, keyed by event type -- the single source

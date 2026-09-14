@@ -492,6 +492,13 @@ export default function QuickActionModal({ tyre, eventType, onClose, onSaved }) 
             </div>
           </>
         );
+      case 'reactivation':
+        return (
+          <div className="field">
+            <label>Reason</label>
+            <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. scrapped in error, refurbished and returned to service" required />
+          </div>
+        );
       default:
         return null;
     }

@@ -29,6 +29,8 @@ const ELEVATED_ROLES = [ROLES.ADMIN, ROLES.DEPOT_MANAGER];
 // ELEVATED_EVENT_TYPES (Depot Manager/Administrator only); `requiresMounted`
 // hides the action when the tyre has no current_bus_id, the same
 // precondition /log-event already enforces via TyreSelect's mountedOnly.
+// `onlyStatus` restricts an action to tyres currently in that status --
+// today just Reactivate, which only makes sense for a Scrapped tyre.
 const QUICK_ACTIONS = [
   { eventType: 'rotation', label: 'Rotate', requiresMounted: true },
   { eventType: 'send_to_repair', label: 'Send to Repair' },
@@ -37,6 +39,9 @@ const QUICK_ACTIONS = [
   { eventType: 'retread_completed', label: 'Retread Completed' },
   { eventType: 'warranty_claim', label: 'Warranty Claim' },
   { eventType: 'condemnation', label: 'Scrap', elevated: true },
+  // Only ever shown for a Scrapped tyre (see the filter below) -- reverses a
+  // condemnation, bringing the tyre back to In Store.
+  { eventType: 'reactivation', label: 'Reactivate', elevated: true, onlyStatus: 'Scrapped' },
 ];
 
 function describeEvent(e, pressureUnit) {
@@ -209,7 +214,14 @@ export default function TyreDetailPage() {
         <div className="card">
           <div className="card-title-row"><h3>Quick Actions</h3></div>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {QUICK_ACTIONS.filter((a) => (!a.elevated || canElevated) && (!a.requiresMounted || tyre.current_bus_id)).map((a) => (
+            {QUICK_ACTIONS.filter((a) => {
+              // A Scrapped tyre can only be Reactivated -- every other action
+              // here would just fail server-side (Scrapped is a dead end for
+              // everything but that one explicit, audited exception).
+              if (tyre.status === 'Scrapped') return a.onlyStatus === 'Scrapped' && canElevated;
+              if (a.onlyStatus) return false;
+              return (!a.elevated || canElevated) && (!a.requiresMounted || tyre.current_bus_id);
+            }).map((a) => (
               <button key={a.eventType} type="button" className="secondary" onClick={() => setQuickActionType(a.eventType)}>
                 {a.label}
               </button>

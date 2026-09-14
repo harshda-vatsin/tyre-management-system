@@ -303,7 +303,8 @@ const ready = (async () => {
         'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
         'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
         'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-        'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim'
+        'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+        'reactivation'
       )),
       event_date TEXT NOT NULL DEFAULT ${NOW},
       bus_id INTEGER REFERENCES buses(id),
@@ -930,7 +931,8 @@ const ready = (async () => {
       'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
       'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
       'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-      'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim'
+      'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+      'reactivation'
     ));
   `);
 

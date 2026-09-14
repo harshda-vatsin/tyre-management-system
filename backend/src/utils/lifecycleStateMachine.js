@@ -55,4 +55,32 @@ async function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
   return { before, after };
 }
 
-module.exports = { ApiError, assertValidTransition, transitionTyreStatus };
+/**
+ * Brings a Scrapped tyre back into service as In Store (available to be
+ * fitted again through the normal fitment_created flow). Deliberately
+ * separate from transitionTyreStatus/assertValidTransition -- Scrapped stays
+ * a dead end in the generic transition graph (tyreLifecycle.js's
+ * TERMINAL_STATUSES) so the master-data PUT /tyres/:id route can never move
+ * a Scrapped tyre anywhere, including back to In Store, without going
+ * through this explicit, audited path. Only callable via the 'reactivation'
+ * tyre_events entry (see createReactivation in tyreEvents.js), which is
+ * elevated to Admin/Depot Manager -- the same authority level condemnation
+ * itself requires.
+ */
+async function reactivateTyre(tyreId) {
+  const before = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
+  if (!before) throw new ApiError(404, `Tyre ${tyreId} not found`);
+  if (before.status !== 'Scrapped') {
+    throw new ApiError(409, `Only a "Scrapped" tyre can be reactivated (current status: "${before.status}")`);
+  }
+
+  await db.prepare(`
+    UPDATE tyres SET status = 'In Store', current_bus_id = NULL, current_position = NULL, updated_at = ${NOW_SQL}
+    WHERE id = ?
+  `).run(tyreId);
+
+  const after = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
+  return { before, after };
+}
+
+module.exports = { ApiError, assertValidTransition, transitionTyreStatus, reactivateTyre };

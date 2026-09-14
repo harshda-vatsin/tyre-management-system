@@ -751,6 +751,13 @@ export default function LogEventPage() {
             </div>
           </>
         );
+      case 'reactivation':
+        return (
+          <div className="field">
+            <label>Reason</label>
+            <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. scrapped in error, refurbished and returned to service" required />
+          </div>
+        );
       default:
         return null;
     }
@@ -823,6 +830,7 @@ export default function LogEventPage() {
             <TyreSelect
               label="Tyre Number"
               mountedOnly={needsMountedTyre}
+              status={eventType === 'reactivation' ? 'Scrapped' : undefined}
               value={tyre?.id}
               onChange={setTyre}
             />

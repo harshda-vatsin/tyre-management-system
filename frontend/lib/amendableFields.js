@@ -21,6 +21,7 @@ export const AMENDABLE_FIELDS = {
   retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose'],
   retread_completed: ['vendor_name', 'vendor_location', 'retread_cost', 'invoice_no', 'invoice_date', 'notes', 'outcome', 'reason'],
   warranty_claim: ['reason', 'notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'vendor_location'],
+  reactivation: ['reason'],
 };
 
 export const FIELD_LABELS = {
