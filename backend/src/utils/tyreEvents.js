@@ -35,8 +35,8 @@ const AMENDABLE_FIELDS = {
   pressure_reading: ['pressure_value', 'notes'],
   rotation: ['to_position', 'reason'],
   replacement: ['reason'],
-  puncture_repair: ['repair_type', 'notes', 'repair_cost', 'supervisor_name', 'tyre_man_name', 'patch_size'],
-  send_to_repair: ['reason', 'nsd_value'],
+  puncture_repair: ['repair_type', 'notes', 'repair_cost', 'supervisor_name', 'tyre_man_name', 'patch_size', 'vendor_name', 'vendor_location', 'invoice_no', 'invoice_date', 'gate_pass_no'],
+  send_to_repair: ['reason', 'nsd_value', 'vendor_name', 'vendor_location', 'gate_pass_no'],
   inter_bus_transfer: ['to_bus_id', 'to_position', 'reason'],
   send_to_store: ['nsd_value', 'stored_at', 'reason'],
   // "Scrap" in the UI -- absorbed the old separate 'scrap' event type's
@@ -46,7 +46,8 @@ const AMENDABLE_FIELDS = {
   fitment_created: ['reason'],
   reservation: ['reason'],
   inspection_completed: ['notes'],
-  retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose'],
+  retread_sent: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose', 'nsd_value', 'notes'],
+  retread_started: ['vendor_name', 'vendor_location', 'gate_pass_no', 'reason', 'retread_purpose', 'notes'],
   retread_completed: ['vendor_name', 'vendor_location', 'retread_cost', 'invoice_no', 'invoice_date', 'notes', 'outcome', 'reason'],
   warranty_claim: ['reason', 'notes', 'vendor_name', 'gate_pass_no', 'invoice_no', 'invoice_date', 'approved_by', 'vendor_location'],
   reactivation: ['reason'],
@@ -145,6 +146,19 @@ function normalizeOptionalNsd(value) {
   return result.value;
 }
 
+async function getEffectiveTyreNsd(tyreId, explicitNsd) {
+  if (explicitNsd !== undefined && explicitNsd !== null && explicitNsd !== '') {
+    const result = validateNsd(explicitNsd);
+    if (result.valid) return result.value;
+  }
+  const lastEvent = await db
+    .prepare(`SELECT nsd_value FROM tyre_events WHERE tyre_id = ? AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1`)
+    .get(tyreId);
+  if (lastEvent?.nsd_value != null) return lastEvent.nsd_value;
+  const tyre = await db.prepare('SELECT initial_nsd FROM tyres WHERE id = ?').get(tyreId);
+  return tyre?.initial_nsd ?? null;
+}
+
 async function getBusModelPositions(busModelId) {
   const model = await db.prepare('SELECT position_labels_json FROM bus_models WHERE id = ?').get(busModelId);
   return JSON.parse(model.position_labels_json);
@@ -205,7 +219,7 @@ async function displaceOccupantIfAny(user, bus, position, excludeTyreId, { event
     stored_at: displace_stored_at,
     performed_by: user.id,
   });
-  const displaceResult = await transitionTyreStatus(occupant.id, 'In Store', { current_bus_id: null, current_position: null });
+  const displaceResult = await transitionTyreStatus(occupant.id, 'In Store', { current_bus_id: null, current_position: null, sub_status: 'Spare' });
   await auditTyreMutation(user, displaceResult.before, displaceResult.after);
   await auditTyreEvent(user, displaceEvent);
   return displaceEvent;
@@ -273,6 +287,8 @@ function createTyreEvent(user, eventType, payload) {
             return createInspectionCompleted(user, payload);
           case 'retread_sent':
             return createRetreadSent(user, payload);
+          case 'retread_started':
+            return createRetreadStarted(user, payload);
           case 'retread_completed':
             return createRetreadCompleted(user, payload);
           case 'warranty_claim':
@@ -573,8 +589,8 @@ async function createReplacement(user, { tyre_id, new_tyre_id, reason, odometer_
     performed_by: user.id,
   });
 
-  const oldResult = await transitionTyreStatus(oldTyre.id, 'In Store', { current_bus_id: null, current_position: null });
-  const newResult = await transitionTyreStatus(newTyre.id, 'Active', { current_bus_id: busId, current_position: position, current_depot_id: depotId, current_package_id: bus.package_id });
+  const oldResult = await transitionTyreStatus(oldTyre.id, 'In Store', { current_bus_id: null, current_position: null, sub_status: 'Spare' });
+  const newResult = await transitionTyreStatus(newTyre.id, 'Active', { current_bus_id: busId, current_position: position, current_depot_id: depotId, current_package_id: bus.package_id, sub_status: null });
 
   await auditTyreMutation(user, oldResult.before, oldResult.after);
   await auditTyreMutation(user, newResult.before, newResult.after);
@@ -593,7 +609,7 @@ async function createReplacement(user, { tyre_id, new_tyre_id, reason, odometer_
 // so bus_id/position here are an optional immediate remount, not an echo of
 // from_bus_id. Left blank, the tyre lands In Store exactly as before, free
 // to be fitted later via fitment_created same as any other stored tyre.
-async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date, bus_id, position, displace_nsd_value, displace_stored_at, displace_reason }) {
+async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_cost, supervisor_name, tyre_man_name, patch_size, odometer_km, event_date, bus_id, position, vendor_name, vendor_location, invoice_no, invoice_date, gate_pass_no, displace_nsd_value, displace_stored_at, displace_reason }) {
   const tyre = await getTyre(tyre_id);
   if (!['plug', 'patch', 'tube'].includes(repair_type)) {
     throw new ApiError(400, 'repair_type must be one of: plug, patch, tube');
@@ -632,6 +648,11 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
     supervisor_name,
     tyre_man_name,
     patch_size,
+    vendor_name: vendor_name ?? null,
+    vendor_location: vendor_location ?? null,
+    invoice_no: invoice_no ?? null,
+    invoice_date: invoice_date ?? null,
+    gate_pass_no: gate_pass_no ?? null,
     odometer_km: odometer_km ?? null,
     notes,
     performed_by: user.id,
@@ -643,8 +664,9 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
         current_position: position,
         current_depot_id: remountBus.depot_id,
         current_package_id: remountBus.package_id,
+        sub_status: null,
       })
-    : await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null });
+    : await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null, sub_status: 'Came Back from Puncture' });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(remountBus ? remountBus.id : before.current_bus_id, odometer_km);
@@ -656,7 +678,7 @@ async function createPunctureRepair(user, { tyre_id, repair_type, notes, repair_
 // out of wherever it currently is (off the bus, if mounted) and marks it
 // Under Repair; createPunctureRepair (fired later, once the mechanic is
 // done) is what returns it to In Store.
-async function createSendToRepair(user, { tyre_id, reason, odometer_km, nsd_value, event_date }) {
+async function createSendToRepair(user, { tyre_id, reason, odometer_km, nsd_value, vendor_name, vendor_location, gate_pass_no, event_date }) {
   const tyre = await getTyre(tyre_id);
   assertDepotScope(user, tyre.current_depot_id);
   const nsd = normalizeOptionalNsd(nsd_value);
@@ -670,11 +692,14 @@ async function createSendToRepair(user, { tyre_id, reason, odometer_km, nsd_valu
     from_position: tyre.current_position,
     odometer_km: odometer_km ?? null,
     nsd_value: nsd,
+    vendor_name: vendor_name ?? null,
+    vendor_location: vendor_location ?? null,
+    gate_pass_no: gate_pass_no ?? null,
     reason,
     performed_by: user.id,
   });
 
-  const { before, after } = await transitionTyreStatus(tyre.id, 'Under Repair', { current_bus_id: null, current_position: null });
+  const { before, after } = await transitionTyreStatus(tyre.id, 'Under Repair', { current_bus_id: null, current_position: null, sub_status: null });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
@@ -758,7 +783,7 @@ async function createSendToStore(user, { tyre_id, reason, nsd_value, stored_at, 
     performed_by: user.id,
   });
 
-  const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null });
+  const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', { current_bus_id: null, current_position: null, sub_status: 'Spare' });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
@@ -853,6 +878,9 @@ async function createPurchaseIntake(user, { tyre_id, notes, vendor_name, gate_pa
     invoice_date,
     performed_by: user.id,
   });
+  if (tyre.status === 'In Store' && !tyre.sub_status) {
+    await db.prepare(`UPDATE tyres SET sub_status = 'Newly Purchased' WHERE id = ?`).run(tyre.id);
+  }
   await auditTyreEvent(user, event);
   return [event];
 }
@@ -904,6 +932,7 @@ async function createFitmentCreated(user, { tyre_id, bus_id, position, reason, o
     current_position: position,
     current_depot_id: bus.depot_id,
     current_package_id: bus.package_id,
+    sub_status: null,
   });
   await maybeUpdateBusOdometer(bus.id, odometer_km);
   await auditTyreMutation(user, before, after);
@@ -961,22 +990,38 @@ async function createInspectionCompleted(user, { tyre_id, notes, event_date }) {
   return [event];
 }
 
-// Dispatches a removed/stored tyre to a retread vendor. vendor_name is a
-// free-text field (no Vendor master-data entity in this phase).
-async function createRetreadSent(user, { tyre_id, vendor_name, vendor_location, gate_pass_no, reason, odometer_km, retread_purpose, event_date }) {
+// Dispatches a removed/stored tyre to a retread vendor ("Going for Retread").
+// vendor_name is a free-text field (no Vendor master-data entity in this phase).
+async function createRetreadSent(user, { tyre_id, vendor_name, vendor_location, gate_pass_no, reason, odometer_km, retread_purpose, nsd_value, auto_scrap, event_date }) {
   const tyre = await getTyre(tyre_id);
   if (!vendor_name) throw new ApiError(400, 'vendor_name is required');
   if (retread_purpose && !['Retread', 'Cut Repair'].includes(retread_purpose)) {
     throw new ApiError(400, 'retread_purpose must be one of: Retread, Cut Repair');
   }
-  // The state machine alone would allow this as a same-status no-op
-  // transition (needed elsewhere for location-only moves); retread dispatch
-  // needs the stronger rule from the spec: "cannot be sent for retread again
-  // while already at vendor".
-  if (tyre.status === 'Under Retread') {
-    throw new ApiError(409, 'Tyre is already under retread');
+  if (tyre.status === 'Under Retread' || tyre.status === 'Going for Retread') {
+    throw new ApiError(409, `Tyre is already ${tyre.status.toLowerCase()}`);
   }
   assertDepotScope(user, tyre.current_depot_id);
+
+  // Business Rule: Tyres with NSD < 2.0 mm cannot proceed through retread workflow and must be scrapped
+  const effectiveNsd = await getEffectiveTyreNsd(tyre.id, nsd_value);
+  if (effectiveNsd != null && effectiveNsd < 2.0) {
+    if (auto_scrap) {
+      return createCondemnation(user, {
+        tyre_id: tyre.id,
+        reason: reason || `Auto-scrapped: NSD (${effectiveNsd} mm) is below 2.0 mm retreading threshold`,
+        nsd_value: effectiveNsd,
+        odometer_km,
+        vendor_name,
+        vendor_location,
+        gate_pass_no,
+        event_date,
+      });
+    }
+    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (below the 2.0 mm minimum required for retreading). It cannot be retreaded and must be classified as Scrap.`);
+  }
+
+  const nsd = normalizeOptionalNsd(nsd_value);
 
   const event = await insertEventRow({
     tyre_id: tyre.id,
@@ -989,21 +1034,55 @@ async function createRetreadSent(user, { tyre_id, vendor_name, vendor_location, 
     vendor_location,
     gate_pass_no,
     odometer_km: odometer_km ?? null,
+    nsd_value: nsd,
     retread_purpose,
     reason,
     performed_by: user.id,
   });
 
-  const { before, after } = await transitionTyreStatus(tyre.id, 'Under Retread', { current_bus_id: null, current_position: null });
+  const { before, after } = await transitionTyreStatus(tyre.id, 'Going for Retread', { current_bus_id: null, current_position: null, sub_status: null });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   await maybeUpdateBusOdometer(before.current_bus_id, odometer_km);
   return [event];
 }
 
+// Marks a tyre as actively undergoing retreading at vendor ("Under Retread").
+async function createRetreadStarted(user, { tyre_id, vendor_name, vendor_location, gate_pass_no, reason, odometer_km, retread_purpose, event_date }) {
+  const tyre = await getTyre(tyre_id);
+  assertDepotScope(user, tyre.current_depot_id);
+  if (tyre.status === 'Under Retread') {
+    throw new ApiError(409, 'Tyre is already under retread');
+  }
+
+  const effectiveNsd = await getEffectiveTyreNsd(tyre.id);
+  if (effectiveNsd != null && effectiveNsd < 2.0) {
+    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (below 2.0 mm minimum required for retreading). It cannot be retreaded and must be classified as Scrap.`);
+  }
+
+  const event = await insertEventRow({
+    tyre_id: tyre.id,
+    event_type: 'retread_started',
+    event_date: event_date || undefined,
+    depot_id: tyre.current_depot_id,
+    vendor_name: vendor_name || undefined,
+    vendor_location: vendor_location || undefined,
+    gate_pass_no: gate_pass_no || undefined,
+    odometer_km: odometer_km ?? null,
+    retread_purpose,
+    reason,
+    performed_by: user.id,
+  });
+
+  const { before, after } = await transitionTyreStatus(tyre.id, 'Under Retread', { current_bus_id: null, current_position: null, sub_status: null });
+  await auditTyreMutation(user, before, after);
+  await auditTyreEvent(user, event);
+  return [event];
+}
+
 // Records the retread vendor's invoice/return and puts the tyre back In
 // Store (ready to be re-fitted via fitment_created, same as any other
-// stored tyre).
+// stored tyre). Sub-status is set to 'Came Back from Retreading'.
 async function createRetreadCompleted(user, { tyre_id, vendor_name, vendor_location, invoice_no, invoice_date, retread_cost, notes, outcome, reason, event_date }) {
   const tyre = await getTyre(tyre_id);
   assertDepotScope(user, tyre.current_depot_id);
@@ -1027,7 +1106,7 @@ async function createRetreadCompleted(user, { tyre_id, vendor_name, vendor_locat
     performed_by: user.id,
   });
 
-  const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', {});
+  const { before, after } = await transitionTyreStatus(tyre.id, 'In Store', { sub_status: 'Came Back from Retreading' });
   await auditTyreMutation(user, before, after);
   await auditTyreEvent(user, event);
   return [event];

@@ -6,18 +6,31 @@
 // completed, warranty filed/approved/closed, scrapped, ...) is a timeline
 // event instead, never a status value.
 
-export const ALL_STATUSES = ['In Store', 'Active', 'Under Repair', 'Under Retread', 'Warranty', 'Scrapped'];
+export const ALL_STATUSES = ['In Store', 'Active', 'Under Repair', 'Going for Retread', 'Under Retread', 'Warranty', 'Scrapped'];
+
+export const IN_STORE_SUB_STATUSES = [
+  'Newly Purchased',
+  'Old',
+  'Came Back from Puncture',
+  'Came Back from Retreading',
+  'Spare',
+];
+
+export function getInStoreDivision(subStatus) {
+  if (!subStatus) return 'Old';
+  if (subStatus === 'Newly Purchased') return 'Newly Purchased';
+  return 'Old';
+}
 
 export const TERMINAL_STATUSES = ['Scrapped'];
 
 // Every status either this model or the earlier, more granular one has ever
-// written to a tyre record, collapsed down to one of the 6 above. Used
-// defensively -- e.g. if a cached/stale value ever reaches the UI -- so
-// nothing renders an unrecognized status.
+// written to a tyre record, collapsed down to one of the statuses above.
 export const LEGACY_STATUS_MAP = {
   'In Store': 'In Store',
   Active: 'Active',
   'Under Repair': 'Under Repair',
+  'Going for Retread': 'Going for Retread',
   'Under Retread': 'Under Retread',
   Warranty: 'Warranty',
   Scrapped: 'Scrapped',
@@ -35,7 +48,7 @@ export const LEGACY_STATUS_MAP = {
   Removed: 'In Store',
   'Repair Completed': 'In Store',
   'Waiting Installation': 'In Store',
-  'Sent for Retread': 'Under Retread',
+  'Sent for Retread': 'Going for Retread',
   'At Retread Vendor': 'Under Retread',
   'Retread Completed': 'In Store',
   'Returned to Inventory': 'In Store',
@@ -54,6 +67,7 @@ const STATUS_BADGE_CLASS = {
   'In Store': 'badge-info',
   Active: 'badge-success',
   'Under Repair': 'badge-warning',
+  'Going for Retread': 'badge-warning',
   'Under Retread': 'badge-warning',
   Warranty: 'badge-warning',
   Scrapped: 'badge-critical',
@@ -68,6 +82,7 @@ export const TYRE_STATUS_COLORS = {
   'In Store': '#1baf7a',
   Active: '#2a78d6',
   'Under Repair': '#eda100',
+  'Going for Retread': '#d97706',
   'Under Retread': '#eda100',
   Warranty: '#eda100',
   Scrapped: '#e34948',
@@ -93,7 +108,8 @@ export const EVENT_TYPES = [
   { value: 'fitment_created', label: 'Fitment (Mount from Store)' },
   { value: 'reservation', label: 'Reservation Update' },
   { value: 'inspection_completed', label: 'Inspection Completed' },
-  { value: 'retread_sent', label: 'Send to Retread' },
+  { value: 'retread_sent', label: 'Send to Retread (Dispatch)' },
+  { value: 'retread_started', label: 'Under Retread (Vendor Intake)' },
   { value: 'retread_completed', label: 'Retread Completed' },
   { value: 'warranty_claim', label: 'Warranty Claim' },
   // Reverses a condemnation -- brings a Scrapped tyre back to In Store.
@@ -120,9 +136,9 @@ export function describeEvent(e, pressureUnit, formatPressure) {
         ? `Installed at ${e.to_position} on ${e.bus_registration_no}, replacing tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`
         : `Removed from ${e.from_position} on ${e.bus_registration_no}, replaced by tyre ${e.related_tyre_number}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'send_to_repair':
-      return `Sent to repair${e.from_bus_registration_no ? ` (removed from ${e.from_bus_registration_no}/${e.from_position})` : ''}${e.reason ? ` - ${e.reason}` : ''}`;
+      return `Sent to repair${e.vendor_name ? ` at "${e.vendor_name}"` : ''}${e.from_bus_registration_no ? ` (removed from ${e.from_bus_registration_no}/${e.from_position})` : ''}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'puncture_repair':
-      return `Repair completed: ${e.repair_type}${e.repair_cost != null ? ` (cost ${e.repair_cost})` : ''}${e.bus_registration_no ? `, remounted at ${e.position} on ${e.bus_registration_no}` : ', returned to store'}${e.notes ? ` - ${e.notes}` : ''}`;
+      return `Repair completed: ${e.repair_type}${e.vendor_name ? ` by "${e.vendor_name}"` : ''}${e.repair_cost != null ? ` (cost ${e.repair_cost})` : ''}${e.bus_registration_no ? `, remounted at ${e.position} on ${e.bus_registration_no}` : ', returned to store'}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'inter_bus_transfer':
       return `${e.from_bus_registration_no}/${e.from_position} → ${e.to_bus_registration_no}/${e.to_position}${e.reason ? ` - ${e.reason}` : ''}`;
     case 'send_to_store':
@@ -138,7 +154,9 @@ export function describeEvent(e, pressureUnit, formatPressure) {
     case 'inspection_completed':
       return `Inspection completed${e.bus_registration_no ? ` at ${e.position} on ${e.bus_registration_no}` : ''}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'retread_sent':
-      return `Sent to retread vendor "${e.vendor_name}"${e.reason ? ` - ${e.reason}` : ''}`;
+      return `Dispatched for retread to "${e.vendor_name}"${e.reason ? ` - ${e.reason}` : ''}`;
+    case 'retread_started':
+      return `Under retread at vendor "${e.vendor_name || '-'}"${e.reason ? ` - ${e.reason}` : ''}`;
     case 'retread_completed':
       return `Retread completed by "${e.vendor_name || '-'}"${e.retread_cost != null ? `, cost ${e.retread_cost}` : ''}${e.notes ? ` - ${e.notes}` : ''}`;
     case 'warranty_claim':

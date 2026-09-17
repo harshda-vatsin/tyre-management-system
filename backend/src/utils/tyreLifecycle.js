@@ -11,7 +11,21 @@
  * data migration in db.js and as a defensive normalizer.
  */
 
-const ALL_STATUSES = ['In Store', 'Active', 'Under Repair', 'Under Retread', 'Warranty', 'Scrapped'];
+const ALL_STATUSES = ['In Store', 'Active', 'Under Repair', 'Going for Retread', 'Under Retread', 'Warranty', 'Scrapped'];
+
+const IN_STORE_SUB_STATUSES = [
+  'Newly Purchased',
+  'Old',
+  'Came Back from Puncture',
+  'Came Back from Retreading',
+  'Spare',
+];
+
+function getInStoreDivision(subStatus) {
+  if (!subStatus) return 'Old';
+  if (subStatus === 'Newly Purchased') return 'Newly Purchased';
+  return 'Old';
+}
 
 // Scrapped is the only one-way door -- everything else is a normal location
 // or a temporary detour that always leads back to In Store/Active. It stays
@@ -27,6 +41,7 @@ const LEGACY_STATUS_MAP = {
   'In Store': 'In Store',
   Active: 'Active',
   'Under Repair': 'Under Repair',
+  'Going for Retread': 'Going for Retread',
   'Under Retread': 'Under Retread',
   Warranty: 'Warranty',
   Scrapped: 'Scrapped',
@@ -46,7 +61,7 @@ const LEGACY_STATUS_MAP = {
   Removed: 'In Store',
   'Repair Completed': 'In Store',
   'Waiting Installation': 'In Store',
-  'Sent for Retread': 'Under Retread',
+  'Sent for Retread': 'Going for Retread',
   'At Retread Vendor': 'Under Retread',
   'Retread Completed': 'In Store',
   'Returned to Inventory': 'In Store',
@@ -61,7 +76,7 @@ function normalizeStatus(status) {
   return LEGACY_STATUS_MAP[status] || 'In Store';
 }
 
-// In Store/Active are the two normal resting states; Under Repair/Under
+// In Store/Active are the two normal resting states; Under Repair/Going for Retread/Under
 // Retread/Warranty are temporary detours that can be entered from -- and
 // returned to In Store/Active from -- either of those (or each other,
 // since which detour applies is a real-world judgment call, not something
@@ -82,7 +97,7 @@ const EVENT_TYPES = [
   'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
   'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
   'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-  'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+  'send_to_repair', 'retread_sent', 'retread_started', 'retread_completed', 'warranty_claim',
   'reactivation',
 ];
 
@@ -116,6 +131,7 @@ function canTransition(fromStatus, toStatus) {
 
 module.exports = {
   ALL_STATUSES,
+  IN_STORE_SUB_STATUSES,
   TERMINAL_STATUSES,
   LEGACY_STATUS_MAP,
   normalizeStatus,
@@ -124,4 +140,5 @@ module.exports = {
   EVENT_OUTCOMES,
   assertKnownStatus,
   canTransition,
+  getInStoreDivision,
 };

@@ -16,6 +16,7 @@ const { assertValidTransition } = require('../utils/lifecycleStateMachine');
 const { TERMINAL_STATUSES } = require('../utils/tyreLifecycle');
 const { ApiError } = require('../utils/apiError');
 const { asyncHandler } = require('../utils/asyncHandler');
+const { computeTyreDistance } = require('../utils/distanceService');
 
 const router = express.Router();
 
@@ -28,7 +29,12 @@ const SELECT_TYRE = `
     t.*,
     d.name AS depot_name, d.code AS depot_code,
     p.name AS package_name, p.code AS package_code,
-    b.registration_no AS bus_registration_no
+    b.registration_no AS bus_registration_no,
+    COALESCE(
+      (SELECT nsd_value FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1),
+      t.initial_nsd
+    ) AS current_nsd,
+    (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_date
   FROM tyres t
   LEFT JOIN depots d ON d.id = t.current_depot_id
   LEFT JOIN packages p ON p.id = t.current_package_id
@@ -38,7 +44,7 @@ const SELECT_TYRE = `
 router.use(authenticate);
 
 router.get('/', asyncHandler(async (req, res) => {
-  const { search = '', depot_id, status, brand, bus_id, page = '1', pageSize = '20' } = req.query;
+  const { search = '', depot_id, status, sub_status, brand, bus_id, page = '1', pageSize = '20' } = req.query;
   const clauses = [];
   const params = {};
 
@@ -49,6 +55,14 @@ router.get('/', asyncHandler(async (req, res) => {
   if (status) {
     clauses.push('t.status = @status');
     params.status = status;
+  }
+  if (sub_status) {
+    if (sub_status === 'Old') {
+      clauses.push("(t.sub_status IN ('Old', 'Came Back from Puncture', 'Came Back from Retreading', 'Spare') OR (t.status = 'In Store' AND (t.sub_status IS NULL OR t.sub_status != 'Newly Purchased')))");
+    } else {
+      clauses.push('t.sub_status = @sub_status');
+      params.sub_status = sub_status;
+    }
   }
   if (brand) {
     clauses.push('t.brand = @brand');
@@ -100,7 +114,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
     return res.status(403).json({ error: 'Not authorized for this depot' });
   }
 
-  res.json(row);
+  const total_distance_km = await computeTyreDistance(row.id);
+  res.json({ ...row, total_distance_km });
 }));
 
 async function validatePosition({ current_bus_id, current_position, excludeTyreId }) {
@@ -129,7 +144,7 @@ async function validatePosition({ current_bus_id, current_position, excludeTyreI
 
 router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
   const {
-    tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status,
+    tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status, sub_status,
     current_bus_id, current_position, current_depot_id,
     vendor_name, gate_pass_no, invoice_no, invoice_date,
   } = req.body || {};
@@ -146,6 +161,9 @@ router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
     return res.status(403).json({ error: 'Not authorized to create a tyre in this depot' });
   }
 
+  const finalStatus = status || 'In Store';
+  const finalSubStatus = sub_status || (finalStatus === 'In Store' ? 'Newly Purchased' : null);
+
   try {
     // Wrapped in a transaction so the tyre row and its opening lifecycle
     // event (purchase_intake) are never created independently of each other
@@ -153,8 +171,8 @@ router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
     const created = await db.transaction(async () => {
       const info = await db
         .prepare(`
-          INSERT INTO tyres (tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status, current_bus_id, current_position, current_depot_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tyres (tyre_number, brand, model, size, pattern, ply_rating, purchase_date, initial_nsd, purchase_cost, status, sub_status, current_bus_id, current_position, current_depot_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           tyre_number,
@@ -166,7 +184,8 @@ router.post('/', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
           purchase_date || null,
           initial_nsd ?? null,
           purchase_cost ?? null,
-          status || 'In Store',
+          finalStatus,
+          finalSubStatus,
           current_bus_id || null,
           current_position || null,
           resolvedDepotId
@@ -245,13 +264,17 @@ router.put('/:id', authorize(...WRITE_ROLES), asyncHandler(async (req, res) => {
     throw err;
   }
 
+  const sub_status = req.body?.sub_status !== undefined
+    ? req.body.sub_status
+    : (status === 'In Store' ? before.sub_status : null);
+
   try {
     await db.prepare(`
       UPDATE tyres
-      SET tyre_number = ?, brand = ?, model = ?, size = ?, pattern = ?, ply_rating = ?, purchase_date = ?, purchase_cost = ?, initial_nsd = ?, status = ?,
+      SET tyre_number = ?, brand = ?, model = ?, size = ?, pattern = ?, ply_rating = ?, purchase_date = ?, purchase_cost = ?, initial_nsd = ?, status = ?, sub_status = ?,
           current_bus_id = ?, current_position = ?, current_depot_id = ?, updated_at = ${NOW_SQL}
       WHERE id = ?
-    `).run(tyre_number, brand, model, size, pattern || null, ply_rating || null, purchase_date, purchase_cost ?? null, initial_nsd, status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
+    `).run(tyre_number, brand, model, size, pattern || null, ply_rating || null, purchase_date, purchase_cost ?? null, initial_nsd, status, sub_status, current_bus_id || null, current_position || null, resolvedDepotId || null, req.params.id);
   } catch (err) {
     if (err.code === PG_ERRORS.UNIQUE_VIOLATION) {
       return res.status(409).json({ error: 'A tyre with this tyre number already exists' });

@@ -130,7 +130,7 @@ export default function BusDetailPage() {
           <div><div className="detail-label">Year of Manufacture</div><div className="detail-value">{bus.year_of_manufacture || '-'}</div></div>
           <div><div className="detail-label">Date of Entry into Fleet</div><div className="detail-value">{formatDate(bus.date_of_entry_into_fleet)}</div></div>
           <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[bus.status] || ''}`}>{bus.status}</span></div></div>
-          <div><div className="detail-label">Odometer</div><div className="detail-value">{bus.odometer_km.toLocaleString()} km</div></div>
+          <div><div className="detail-label">Total Distance Travelled (Odometer)</div><div className="detail-value" style={{ fontWeight: 600 }}>{bus.odometer_km.toLocaleString()} km</div></div>
         </div>
       </div>
 

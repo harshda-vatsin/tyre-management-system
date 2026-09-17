@@ -15,7 +15,7 @@ import LoadingState from '../../../components/LoadingState.jsx';
 import FilterBar from '../../../components/FilterBar.jsx';
 import Pagination from '../../../components/Pagination.jsx';
 import CsvImportModal from '../../../components/CsvImportModal.jsx';
-import { ALL_STATUSES, statusBadgeClass } from '../../../lib/tyreLifecycle.js';
+import { ALL_STATUSES, IN_STORE_SUB_STATUSES, statusBadgeClass } from '../../../lib/tyreLifecycle.js';
 
 const IMPORT_COLUMNS = [
   { key: 'tyre_number', required: true, example: 'TY001' },
@@ -42,7 +42,7 @@ const STATUS_OPTIONS = ALL_STATUSES;
 function emptyForm(defaultDepotId) {
   return {
     tyre_number: '', brand: '', model: '', size: '', pattern: '', ply_rating: '', purchase_date: '', purchase_cost: '', initial_nsd: '',
-    status: 'In Store', current_bus_id: '', current_position: '', current_depot_id: defaultDepotId || '',
+    status: 'In Store', sub_status: 'Newly Purchased', current_bus_id: '', current_position: '', current_depot_id: defaultDepotId || '',
     vendor_name: '', gate_pass_no: '', invoice_no: '', invoice_date: '',
   };
 }
@@ -64,6 +64,7 @@ export default function TyresPage() {
   // Supports deep-linking from dashboard drill-downs (e.g. /tyres?status=Active).
   const [filters, setFilters] = useState({
     status: searchParams.get('status') || '',
+    sub_status: searchParams.get('sub_status') || '',
     depot_id: searchParams.get('depot_id') || '',
     brand: '',
   });
@@ -90,6 +91,7 @@ export default function TyresPage() {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
       if (search) params.set('search', search);
       if (filters.status) params.set('status', filters.status);
+      if (filters.sub_status) params.set('sub_status', filters.sub_status);
       if (filters.depot_id) params.set('depot_id', filters.depot_id);
       if (filters.brand) params.set('brand', filters.brand);
       const data = await api.get(`/tyres?${params.toString()}`);
@@ -134,6 +136,7 @@ export default function TyresPage() {
       purchase_cost: tyre.purchase_cost ?? '',
       initial_nsd: tyre.initial_nsd ?? '',
       status: tyre.status,
+      sub_status: tyre.sub_status || '',
       current_bus_id: tyre.current_bus_id || '',
       current_position: tyre.current_position || '',
       current_depot_id: tyre.current_depot_id || '',
@@ -206,6 +209,17 @@ export default function TyresPage() {
           onSelectChange={(key, value) => { setPage(1); setFilters((f) => ({ ...f, [key]: value })); }}
           selects={[
             { key: 'status', label: 'Status', options: STATUS_OPTIONS.map((s) => ({ value: s, label: s })) },
+            {
+              key: 'sub_status',
+              label: 'In-Store Type',
+              options: [
+                { value: 'Newly Purchased', label: 'New • Newly Purchased' },
+                { value: 'Old', label: 'Old • All Used / Spares' },
+                { value: 'Came Back from Puncture', label: 'Old • From Puncture' },
+                { value: 'Came Back from Retreading', label: 'Old • From Retreading' },
+                { value: 'Spare', label: 'Old • Spare (From Bus)' },
+              ],
+            },
             ...(isFleetWide ? [{ key: 'depot_id', label: 'Depot', options: depots.map((d) => ({ value: d.id, label: d.name })) }] : []),
           ]}
         />
@@ -223,6 +237,7 @@ export default function TyresPage() {
                     <th>Tyre Number</th>
                     <th>Brand</th>
                     <th>Status</th>
+                    <th>Current NSD</th>
                     <th>Depot</th>
                     <th>Bus / Position</th>
                     {canWrite && <th></th>}
@@ -233,7 +248,27 @@ export default function TyresPage() {
                     <tr key={t.id}>
                       <td><Link href={`/tyres/${t.id}`}>{t.tyre_number}</Link></td>
                       <td>{t.brand}</td>
-                      <td><span className={`badge ${statusBadgeClass(t.status)}`}>{t.status}</span></td>
+                      <td>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                          <span className={`badge ${statusBadgeClass(t.status)}`}>{t.status}</span>
+                          {t.status === 'In Store' && (
+                            t.sub_status === 'Newly Purchased' ? (
+                              <span className="badge" style={{ fontSize: '0.7rem', backgroundColor: 'rgba(27, 175, 122, 0.15)', color: '#107e56', fontWeight: 600 }}>
+                                New &bull; Newly Purchased
+                              </span>
+                            ) : (
+                              <span className="badge" style={{ fontSize: '0.7rem', backgroundColor: 'rgba(100, 116, 139, 0.15)', color: '#475569', fontWeight: 600 }}>
+                                Old{t.sub_status && t.sub_status !== 'Old' ? ` &bull; ${t.sub_status}` : ''}
+                              </span>
+                            )
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <span style={{ fontWeight: 600, color: (t.current_nsd != null && t.current_nsd < 2.0) ? 'var(--critical)' : 'inherit' }}>
+                          {t.current_nsd != null ? `${t.current_nsd} mm` : (t.initial_nsd != null ? `${t.initial_nsd} mm` : '-')}
+                        </span>
+                      </td>
                       <td>{t.depot_name || '-'}</td>
                       <td>{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '-'}</td>
                       {canWrite && (
@@ -362,10 +397,26 @@ export default function TyresPage() {
             )}
             <div className="field">
               <label>Status</label>
-              <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value, sub_status: e.target.value === 'In Store' ? (form.sub_status || 'Newly Purchased') : '' })}>
                 {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            {form.status === 'In Store' && (
+              <div className="field">
+                <label>In-Store Division & Sub-Status</label>
+                <select value={form.sub_status || 'Newly Purchased'} onChange={(e) => setForm({ ...form, sub_status: e.target.value })}>
+                  <optgroup label="New Tyres">
+                    <option value="Newly Purchased">Newly Purchased (New)</option>
+                  </optgroup>
+                  <optgroup label="Old / Used Tyres">
+                    <option value="Old">Old (General Recirculated)</option>
+                    <option value="Came Back from Puncture">Came Back from Puncture (Old)</option>
+                    <option value="Came Back from Retreading">Came Back from Retreading (Old)</option>
+                    <option value="Spare">Spare / Removed from Bus (Old)</option>
+                  </optgroup>
+                </select>
+              </div>
+            )}
             <div className="field">
               <label>Depot</label>
               <select value={form.current_depot_id} onChange={(e) => setForm({ ...form, current_depot_id: e.target.value })} disabled={!!form.current_bus_id}>

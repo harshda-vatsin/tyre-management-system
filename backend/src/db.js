@@ -286,8 +286,9 @@ const ready = (async () => {
       initial_nsd REAL,
       purchase_cost REAL,
       status TEXT NOT NULL DEFAULT 'In Store' CHECK (status IN (
-        'In Store', 'Active', 'Under Repair', 'Under Retread', 'Warranty', 'Scrapped'
+        'In Store', 'Active', 'Under Repair', 'Going for Retread', 'Under Retread', 'Warranty', 'Scrapped'
       )),
+      sub_status TEXT,
       current_bus_id INTEGER REFERENCES buses(id),
       current_position TEXT,
       current_depot_id INTEGER REFERENCES depots(id),
@@ -303,7 +304,7 @@ const ready = (async () => {
         'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
         'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
         'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-        'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+        'send_to_repair', 'retread_sent', 'retread_started', 'retread_completed', 'warranty_claim',
         'reactivation'
       )),
       event_date TEXT NOT NULL DEFAULT ${NOW},
@@ -926,12 +927,17 @@ const ready = (async () => {
   await exec(`UPDATE tyre_events SET event_type = 'condemnation' WHERE event_type IN ('scrap', 'scrap_disposal')`);
 
   await exec(`
+    ALTER TABLE tyres ADD COLUMN IF NOT EXISTS sub_status TEXT;
+    ALTER TABLE tyres DROP CONSTRAINT IF EXISTS tyres_status_check;
+    ALTER TABLE tyres ADD CONSTRAINT tyres_status_check CHECK (status IN (
+      'In Store', 'Active', 'Under Repair', 'Going for Retread', 'Under Retread', 'Warranty', 'Scrapped'
+    ));
     ALTER TABLE tyre_events DROP CONSTRAINT IF EXISTS tyre_events_event_type_check;
     ALTER TABLE tyre_events ADD CONSTRAINT tyre_events_event_type_check CHECK (event_type IN (
       'nsd_reading', 'pressure_reading', 'rotation', 'replacement',
       'puncture_repair', 'inter_bus_transfer', 'send_to_store', 'condemnation',
       'purchase_intake', 'fitment_created', 'reservation', 'inspection_completed',
-      'send_to_repair', 'retread_sent', 'retread_completed', 'warranty_claim',
+      'send_to_repair', 'retread_sent', 'retread_started', 'retread_completed', 'warranty_claim',
       'reactivation'
     ));
   `);

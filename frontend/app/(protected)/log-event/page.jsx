@@ -445,6 +445,18 @@ export default function LogEventPage() {
               <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. puncture found" />
             </div>
             <div className="field">
+              <label>Vendor Name (optional)</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Acme Tyre Repair" />
+            </div>
+            <div className="field">
+              <label>Vendor Location (optional)</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} placeholder="e.g. Industrial Area" />
+            </div>
+            <div className="field">
+              <label>Gate Pass No. (optional)</label>
+              <input value={fields.gate_pass_no || ''} onChange={(e) => set('gate_pass_no', e.target.value)} />
+            </div>
+            <div className="field">
               <label>Odometer Reading (km)</label>
               <input type="number" min="0" value={fields.odometer_km || ''} onChange={(e) => set('odometer_km', e.target.value)} />
             </div>
@@ -469,6 +481,26 @@ export default function LogEventPage() {
             <div className="field">
               <label>Patch Size</label>
               <input value={fields.patch_size || ''} onChange={(e) => set('patch_size', e.target.value)} placeholder="e.g. 30mm" />
+            </div>
+            <div className="field">
+              <label>Vendor Name</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Speed Tyre Repairs" />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} placeholder="e.g. Depot Workshop / Sector 5" />
+            </div>
+            <div className="field">
+              <label>Invoice No.</label>
+              <input value={fields.invoice_no || ''} onChange={(e) => set('invoice_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Invoice Date</label>
+              <input type="date" value={fields.invoice_date || ''} onChange={(e) => set('invoice_date', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Gate Pass No.</label>
+              <input value={fields.gate_pass_no || ''} onChange={(e) => set('gate_pass_no', e.target.value)} />
             </div>
             <div className="field">
               <label>Supervisor Name</label>
@@ -597,9 +629,60 @@ export default function LogEventPage() {
             <input value={fields.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="e.g. all checks passed" />
           </div>
         );
-      case 'retread_sent':
+      case 'retread_sent': {
+        const effectiveNsd = fields.nsd_value !== undefined && fields.nsd_value !== ''
+          ? Number(fields.nsd_value)
+          : (tyre?.current_nsd != null ? Number(tyre.current_nsd) : (tyre?.initial_nsd != null ? Number(tyre.initial_nsd) : null));
+        const isUnder2mm = effectiveNsd != null && effectiveNsd < 2.0;
+
         return (
           <>
+            {isUnder2mm && (
+              <div className="card" style={{ backgroundColor: 'rgba(227, 73, 72, 0.1)', border: '1px solid var(--critical)', padding: '0.75rem', marginBottom: '1rem' }}>
+                <strong style={{ color: 'var(--critical)' }}>⚠️ Ineligible for Retread (NSD &lt; 2.0 mm)</strong>
+                <p style={{ fontSize: '0.85rem', margin: '0.35rem 0' }}>
+                  This tyre has an NSD of <strong>{effectiveNsd} mm</strong>. Under tyre safety rules, tyres with NSD below 2.0 mm cannot proceed through retreading and must be scrapped.
+                </p>
+                <button
+                  type="button"
+                  className="danger"
+                  style={{ marginTop: '0.35rem', fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}
+                  onClick={async () => {
+                    if (confirm(`Classify tyre ${tyre.tyre_number} as Scrap now?`)) {
+                      setSaving(true);
+                      try {
+                        await api.post('/events', {
+                          event_type: 'condemnation',
+                          tyre_id: tyre.id,
+                          reason: `Auto-scrapped: NSD (${effectiveNsd} mm) is below 2.0 mm retreading threshold`,
+                          nsd_value: effectiveNsd,
+                        });
+                        setSuccess('Tyre successfully classified as Scrap.');
+                        setFields({});
+                      } catch (err) {
+                        setError(err.message);
+                      } finally {
+                        setSaving(false);
+                      }
+                    }
+                  }}
+                >
+                  Classify as Scrap Instead
+                </button>
+              </div>
+            )}
+            <div className="field">
+              <label>Current NSD (mm)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="25"
+                value={fields.nsd_value !== undefined ? fields.nsd_value : (tyre?.current_nsd != null ? tyre.current_nsd : '')}
+                onChange={(e) => set('nsd_value', e.target.value)}
+                placeholder={tyre?.current_nsd != null ? String(tyre.current_nsd) : 'Enter NSD'}
+              />
+            </div>
             <div className="field">
               <label>Vendor Name</label>
               <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Acme Retreads" required />
@@ -627,6 +710,36 @@ export default function LogEventPage() {
             <div className="field">
               <label>Reason</label>
               <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. tread worn, retread eligible" />
+            </div>
+          </>
+        );
+      }
+      case 'retread_started':
+        return (
+          <>
+            <div className="field">
+              <label>Vendor Name</label>
+              <input value={fields.vendor_name || ''} onChange={(e) => set('vendor_name', e.target.value)} placeholder="e.g. Acme Retreads" />
+            </div>
+            <div className="field">
+              <label>Vendor Location</label>
+              <input value={fields.vendor_location || ''} onChange={(e) => set('vendor_location', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Gate Pass No.</label>
+              <input value={fields.gate_pass_no || ''} onChange={(e) => set('gate_pass_no', e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Purpose</label>
+              <select value={fields.retread_purpose || ''} onChange={(e) => set('retread_purpose', e.target.value)}>
+                <option value="">Select</option>
+                <option value="Retread">Retread</option>
+                <option value="Cut Repair">Cut Repair</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Notes / Reason</label>
+              <input value={fields.reason || ''} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. Received by vendor, processing started" />
             </div>
           </>
         );

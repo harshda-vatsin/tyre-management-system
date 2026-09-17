@@ -41,8 +41,9 @@ async function tyreStatusReport(filters) {
   const rows = await db
     .prepare(`
       SELECT
-        t.tyre_number, t.brand, t.status,
-        d.name AS depot_name, p.name AS package_name, b.registration_no AS bus_registration_no, t.current_position,
+        t.tyre_number, t.brand, t.status, t.sub_status,
+        d.name AS depot_name, p.name AS package_name, b.registration_no AS bus_registration_no,
+        b.odometer_km AS bus_odometer_km, t.current_position,
         ${lastEventValueSql('nsd_reading', 'nsd_value')} AS last_nsd_value,
         ${lastEventValueSql('nsd_reading', 'event_date')} AS last_nsd_date,
         ${lastEventValueSql('pressure_reading', 'pressure_value')} AS last_pressure_value,
@@ -124,8 +125,8 @@ async function tyreHistoryReport(filters) {
     .prepare(`
       SELECT
         e.event_date, e.event_type, t.tyre_number, b.registration_no AS bus_registration_no,
-        e.position, e.from_position, e.to_position, e.nsd_value, e.pressure_value,
-        e.repair_type, e.reason, e.stored_at, e.notes, u.username AS performed_by_username
+        e.odometer_km, e.position, e.from_position, e.to_position, e.nsd_value, e.pressure_value,
+        e.vendor_name, e.vendor_location, e.repair_type, e.reason, e.stored_at, e.notes, u.username AS performed_by_username
       FROM tyre_events e
       JOIN tyres t ON t.id = e.tyre_id
       LEFT JOIN buses b ON b.id = e.bus_id
@@ -219,7 +220,7 @@ async function rotationReplacementReport(filters) {
     .prepare(`
       SELECT
         e.event_date, e.event_type, t.tyre_number, b.registration_no AS bus_registration_no,
-        e.from_position, e.to_position, rt.tyre_number AS related_tyre_number, e.reason,
+        e.odometer_km, e.nsd_value, e.from_position, e.to_position, rt.tyre_number AS related_tyre_number, e.reason,
         u.username AS performed_by_username
       FROM tyre_events e
       JOIN tyres t ON t.id = e.tyre_id
@@ -248,7 +249,8 @@ async function punctureIncidentReport(filters) {
     .prepare(`
       SELECT
         e.event_date, t.tyre_number, b.registration_no AS bus_registration_no,
-        e.repair_type, e.notes, u.username AS performed_by_username
+        e.odometer_km, e.nsd_value, e.repair_type, e.repair_cost, e.vendor_name, e.vendor_location,
+        e.invoice_no, e.invoice_date, e.gate_pass_no, e.notes, u.username AS performed_by_username
       FROM tyre_events e
       JOIN tyres t ON t.id = e.tyre_id
       LEFT JOIN buses b ON b.id = e.bus_id
@@ -283,7 +285,7 @@ async function interBusTransferReport(filters) {
   return db
     .prepare(`
       SELECT
-        e.event_date, t.tyre_number,
+        e.event_date, t.tyre_number, e.odometer_km, e.nsd_value,
         fb.registration_no AS from_bus_registration_no, fd.name AS from_depot_name,
         tb.registration_no AS to_bus_registration_no, td.name AS to_depot_name,
         e.reason, u.username AS performed_by_username
@@ -442,6 +444,7 @@ async function scrapReport(filters) {
       SELECT
         t.tyre_number, t.brand, d.name AS depot_name,
         ${lastEventValueSql('condemnation', 'event_date')} AS condemned_date,
+        ${lastEventValueSql('condemnation', 'odometer_km')} AS odometer_km,
         ${lastEventValueSql('condemnation', 'nsd_value')} AS nsd_at_condemnation,
         ${lastEventValueSql('condemnation', 'scrap_value')} AS scrap_value,
         ${lastEventValueSql('condemnation', 'vendor_name')} AS vendor_name,
@@ -479,7 +482,7 @@ async function retreadHistoryReport(filters) {
   return db
     .prepare(`
       SELECT
-        e.event_date, t.tyre_number, e.event_type, e.vendor_name, e.vendor_location, e.retread_cost,
+        e.event_date, t.tyre_number, e.event_type, e.odometer_km, e.nsd_value, e.vendor_name, e.vendor_location, e.retread_cost,
         e.gate_pass_no, e.invoice_no, e.invoice_date, e.retread_purpose, e.outcome,
         e.reason, e.notes, d.name AS depot_name, u.username AS performed_by_username
       FROM tyre_events e
@@ -503,7 +506,7 @@ async function warrantyClaimsReport(filters) {
   return db
     .prepare(`
       SELECT
-        e.event_date, t.tyre_number, t.status AS current_tyre_status, e.reason, e.notes,
+        e.event_date, t.tyre_number, t.status AS current_tyre_status, e.odometer_km, e.nsd_value, e.reason, e.notes,
         e.vendor_name, e.vendor_location, e.gate_pass_no, e.invoice_no, e.invoice_date, e.approved_by,
         d.name AS depot_name, u.username AS performed_by_username
       FROM tyre_events e
@@ -558,17 +561,22 @@ async function stockSummaryReport(filters) {
   depotScopeClause('t.current_package_id', package_id, clauses, params, 'packageId');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
-  return db
+  const rows = await db
     .prepare(`
-      SELECT d.name AS depot_name, p.name AS package_name, t.status, COUNT(*) AS tyre_count
+      SELECT d.name AS depot_name, p.name AS package_name, t.status, t.sub_status, COUNT(*) AS tyre_count
       FROM tyres t
       LEFT JOIN depots d ON d.id = t.current_depot_id
       LEFT JOIN packages p ON p.id = t.current_package_id
       ${where}
-      GROUP BY t.current_depot_id, t.current_package_id, t.status, d.name, p.name
-      ORDER BY d.name, p.name, t.status
+      GROUP BY t.current_depot_id, t.current_package_id, t.status, t.sub_status, d.name, p.name
+      ORDER BY d.name, p.name, t.status, t.sub_status
     `)
     .all(params);
+
+  return rows.map((r) => ({
+    ...r,
+    store_division: r.status === 'In Store' ? (r.sub_status === 'Newly Purchased' ? 'Newly Purchased (New)' : 'Old') : '-',
+  }));
 }
 
 const REPORTS = {
@@ -586,9 +594,11 @@ const REPORTS = {
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'brand', label: 'Brand' },
       { key: 'status', label: 'Status' },
+      { key: 'sub_status', label: 'Sub-Status' },
       { key: 'depot_name', label: 'Depot' },
       { key: 'package_name', label: 'Package' },
       { key: 'bus_registration_no', label: 'Bus' },
+      { key: 'bus_odometer_km', label: 'Bus Odometer (km)' },
       { key: 'current_position', label: 'Position' },
       { key: 'last_nsd_value', label: 'Last NSD (mm)' },
       { key: 'last_nsd_date', label: 'Last NSD Date' },
@@ -630,11 +640,13 @@ const REPORTS = {
       { key: 'event_date', label: 'Date' },
       { key: 'event_type', label: 'Event Type' },
       { key: 'bus_registration_no', label: 'Bus' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
       { key: 'position', label: 'Position' },
       { key: 'from_position', label: 'From Position' },
       { key: 'to_position', label: 'To Position' },
-      { key: 'nsd_value', label: 'NSD' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'pressure_value', label: 'Pressure' },
+      { key: 'vendor_name', label: 'Vendor' },
       { key: 'repair_type', label: 'Repair Type' },
       { key: 'reason', label: 'Reason' },
       { key: 'notes', label: 'Notes' },
@@ -674,6 +686,8 @@ const REPORTS = {
       { key: 'event_type', label: 'Event Type' },
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'bus_registration_no', label: 'Bus' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'from_position', label: 'From Position' },
       { key: 'to_position', label: 'To Position' },
       { key: 'related_tyre_number', label: 'Related Tyre' },
@@ -694,7 +708,15 @@ const REPORTS = {
       { key: 'event_date', label: 'Date' },
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'bus_registration_no', label: 'Bus' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'repair_type', label: 'Repair Type' },
+      { key: 'repair_cost', label: 'Repair Cost' },
+      { key: 'vendor_name', label: 'Vendor Name' },
+      { key: 'vendor_location', label: 'Vendor Location' },
+      { key: 'invoice_no', label: 'Invoice No.' },
+      { key: 'invoice_date', label: 'Invoice Date' },
+      { key: 'gate_pass_no', label: 'Gate Pass No.' },
       { key: 'notes', label: 'Notes' },
       { key: 'performed_by_username', label: 'Repaired By' },
     ],
@@ -711,6 +733,8 @@ const REPORTS = {
     columns: [
       { key: 'event_date', label: 'Date' },
       { key: 'tyre_number', label: 'Tyre Number' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'from_bus_registration_no', label: 'From Bus' },
       { key: 'from_depot_name', label: 'From Depot' },
       { key: 'to_bus_registration_no', label: 'To Bus' },
@@ -770,6 +794,7 @@ const REPORTS = {
       { key: 'brand', label: 'Brand' },
       { key: 'depot_name', label: 'Depot' },
       { key: 'condemned_date', label: 'Scrap Date' },
+      { key: 'odometer_km', label: 'Odometer at Scrap (km)' },
       { key: 'nsd_at_condemnation', label: 'NSD at Scrap' },
       { key: 'scrap_value', label: 'Scrap Value' },
       { key: 'vendor_name', label: 'Vendor' },
@@ -794,6 +819,8 @@ const REPORTS = {
       { key: 'event_date', label: 'Date' },
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'event_type', label: 'Event' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'vendor_name', label: 'Vendor' },
       { key: 'vendor_location', label: 'Vendor Location' },
       { key: 'gate_pass_no', label: 'Gate Pass No.' },
@@ -819,6 +846,8 @@ const REPORTS = {
       { key: 'event_date', label: 'Date' },
       { key: 'tyre_number', label: 'Tyre Number' },
       { key: 'current_tyre_status', label: 'Current Status' },
+      { key: 'odometer_km', label: 'Odometer (km)' },
+      { key: 'nsd_value', label: 'NSD (mm)' },
       { key: 'vendor_name', label: 'Vendor' },
       { key: 'vendor_location', label: 'Vendor Location' },
       { key: 'gate_pass_no', label: 'Gate Pass No.' },
@@ -861,6 +890,8 @@ const REPORTS = {
       { key: 'depot_name', label: 'Depot' },
       { key: 'package_name', label: 'Package' },
       { key: 'status', label: 'Status' },
+      { key: 'store_division', label: 'In-Store Division' },
+      { key: 'sub_status', label: 'Sub-Status' },
       { key: 'tyre_count', label: 'Tyre Count' },
     ],
     getRows: stockSummaryReport,

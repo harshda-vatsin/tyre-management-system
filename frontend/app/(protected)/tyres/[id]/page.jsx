@@ -35,7 +35,8 @@ const QUICK_ACTIONS = [
   { eventType: 'rotation', label: 'Rotate', requiresMounted: true },
   { eventType: 'send_to_repair', label: 'Send to Repair' },
   { eventType: 'puncture_repair', label: 'Repair Completed' },
-  { eventType: 'retread_sent', label: 'Send to Retread' },
+  { eventType: 'retread_sent', label: 'Going for Retread (Dispatch)' },
+  { eventType: 'retread_started', label: 'Under Retread (Vendor Intake)' },
   { eventType: 'retread_completed', label: 'Retread Completed' },
   { eventType: 'warranty_claim', label: 'Warranty Claim' },
   { eventType: 'condemnation', label: 'Scrap', elevated: true },
@@ -166,6 +167,8 @@ export default function TyreDetailPage() {
     }
   };
 
+  const isLowNsd = tyre.current_nsd != null && tyre.current_nsd < 2.0;
+
   return (
     <div>
       <PageHeader
@@ -182,7 +185,36 @@ export default function TyreDetailPage() {
           <div><div className="detail-label">Size</div><div className="detail-value">{tyre.size || '-'}</div></div>
           <div><div className="detail-label">Date of Purchase</div><div className="detail-value">{formatDate(tyre.purchase_date)}</div></div>
           <div><div className="detail-label">Initial NSD</div><div className="detail-value">{tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-'}</div></div>
-          <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${statusBadgeClass(tyre.status)}`}>{tyre.status}</span></div></div>
+          <div>
+            <div className="detail-label">Current NSD</div>
+            <div className="detail-value" style={{ fontWeight: 700, fontSize: '1.1rem', color: isLowNsd ? 'var(--critical)' : 'inherit' }}>
+              {tyre.current_nsd != null ? `${tyre.current_nsd} mm` : (tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-')}
+              {isLowNsd && <span className="badge badge-critical" style={{ marginLeft: '0.5rem', fontSize: '0.75rem' }}>&lt; 2mm (Scrap Only)</span>}
+            </div>
+          </div>
+          <div>
+            <div className="detail-label">Status</div>
+            <div className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+              <span className={`badge ${statusBadgeClass(tyre.status)}`}>{tyre.status}</span>
+              {tyre.status === 'In Store' && (
+                tyre.sub_status === 'Newly Purchased' ? (
+                  <span className="badge" style={{ backgroundColor: 'rgba(27, 175, 122, 0.15)', color: '#107e56', border: '1px solid rgba(27, 175, 122, 0.3)', fontWeight: 600 }}>
+                    New &bull; Newly Purchased
+                  </span>
+                ) : (
+                  <span className="badge" style={{ backgroundColor: 'rgba(100, 116, 139, 0.15)', color: '#475569', border: '1px solid rgba(100, 116, 139, 0.3)', fontWeight: 600 }}>
+                    Old{tyre.sub_status && tyre.sub_status !== 'Old' ? ` &bull; ${tyre.sub_status}` : ''}
+                  </span>
+                )
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="detail-label">Total Distance Travelled</div>
+            <div className="detail-value" style={{ fontWeight: 600 }}>
+              {tyre.total_distance_km != null ? `${tyre.total_distance_km.toLocaleString()} km` : '0 km'}
+            </div>
+          </div>
           <div><div className="detail-label">Current Depot</div><div className="detail-value">{tyre.depot_name || '-'}</div></div>
           <div>
             <div className="detail-label">Current Bus / Position</div>

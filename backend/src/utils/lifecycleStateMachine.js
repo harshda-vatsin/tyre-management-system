@@ -40,6 +40,7 @@ async function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
 
   const merged = {
     status: newStatus,
+    sub_status: locationFields.sub_status !== undefined ? locationFields.sub_status : (newStatus === 'In Store' ? before.sub_status : null),
     current_bus_id: locationFields.current_bus_id !== undefined ? locationFields.current_bus_id : before.current_bus_id,
     current_position: locationFields.current_position !== undefined ? locationFields.current_position : before.current_position,
     current_depot_id: locationFields.current_depot_id !== undefined ? locationFields.current_depot_id : before.current_depot_id,
@@ -47,9 +48,9 @@ async function transitionTyreStatus(tyreId, newStatus, locationFields = {}) {
   };
 
   await db.prepare(`
-    UPDATE tyres SET status = ?, current_bus_id = ?, current_position = ?, current_depot_id = ?, current_package_id = ?, updated_at = ${NOW_SQL}
+    UPDATE tyres SET status = ?, sub_status = ?, current_bus_id = ?, current_position = ?, current_depot_id = ?, current_package_id = ?, updated_at = ${NOW_SQL}
     WHERE id = ?
-  `).run(merged.status, merged.current_bus_id, merged.current_position, merged.current_depot_id, merged.current_package_id, tyreId);
+  `).run(merged.status, merged.sub_status, merged.current_bus_id, merged.current_position, merged.current_depot_id, merged.current_package_id, tyreId);
 
   const after = await db.prepare('SELECT * FROM tyres WHERE id = ?').get(tyreId);
   return { before, after };
@@ -75,7 +76,7 @@ async function reactivateTyre(tyreId) {
   }
 
   await db.prepare(`
-    UPDATE tyres SET status = 'In Store', current_bus_id = NULL, current_position = NULL, updated_at = ${NOW_SQL}
+    UPDATE tyres SET status = 'In Store', sub_status = 'Spare', current_bus_id = NULL, current_position = NULL, updated_at = ${NOW_SQL}
     WHERE id = ?
   `).run(tyreId);
 
