@@ -255,9 +255,9 @@ export default function BusesPage() {
                     <th>Bus Registration Number</th>
                     <th>Model / Make</th>
                     <th>Associated Depot</th>
-                    <th>Number of Tyre Positions</th>
+                    <th>Tyre Positions</th>
                     <th>Status</th>
-                    <th>Odometer</th>
+                    <th>Odometer (KMs)</th>
                     {canWrite && <th></th>}
                   </tr>
                 </thead>
@@ -265,12 +265,18 @@ export default function BusesPage() {
                   {buses.map((b) => (
                     <tr key={b.id}>
                       <td>#{b.id}</td>
-                      <td><Link href={`/buses/${b.id}`}>{b.registration_no}</Link></td>
+                      <td><Link href={`/buses/${b.id}`} style={{ fontWeight: 600 }}>{b.registration_no}</Link></td>
                       <td>{b.bus_model_name}</td>
                       <td>{b.depot_name}</td>
-                      <td>{b.num_tyre_positions}</td>
+                      <td>
+                        {b.mounted_tyres_count != null ? (
+                          <span style={{ fontWeight: 500 }}>{b.mounted_tyres_count} / {b.num_tyre_positions} Fitted</span>
+                        ) : (
+                          <span>{b.num_tyre_positions} Positions</span>
+                        )}
+                      </td>
                       <td><span className={`badge ${STATUS_BADGE[b.status] || ''}`}>{b.status}</span></td>
-                      <td>{b.odometer_km.toLocaleString()} km</td>
+                      <td style={{ fontWeight: 600 }}>{b.odometer_km.toLocaleString()} km</td>
                       {canWrite && (
                         <td>
                           <RowActionsMenu

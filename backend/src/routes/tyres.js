@@ -30,11 +30,14 @@ const SELECT_TYRE = `
     d.name AS depot_name, d.code AS depot_code,
     p.name AS package_name, p.code AS package_code,
     b.registration_no AS bus_registration_no,
+    b.odometer_km AS bus_odometer_km,
     COALESCE(
       (SELECT nsd_value FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1),
       t.initial_nsd
     ) AS current_nsd,
-    (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_date
+    (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_date,
+    (SELECT pressure_value FROM tyre_events WHERE tyre_id = t.id AND pressure_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS current_pressure,
+    (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND pressure_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_pressure_date
   FROM tyres t
   LEFT JOIN depots d ON d.id = t.current_depot_id
   LEFT JOIN packages p ON p.id = t.current_package_id

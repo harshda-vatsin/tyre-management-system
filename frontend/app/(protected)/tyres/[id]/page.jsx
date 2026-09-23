@@ -184,6 +184,8 @@ export default function TyreDetailPage() {
           <div><div className="detail-label">Model / Type</div><div className="detail-value">{tyre.model || '-'}</div></div>
           <div><div className="detail-label">Size</div><div className="detail-value">{tyre.size || '-'}</div></div>
           <div><div className="detail-label">Date of Purchase</div><div className="detail-value">{formatDate(tyre.purchase_date)}</div></div>
+          
+          {/* Tyre NSD Section */}
           <div><div className="detail-label">Initial NSD</div><div className="detail-value">{tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-'}</div></div>
           <div>
             <div className="detail-label">Current NSD</div>
@@ -191,7 +193,35 @@ export default function TyreDetailPage() {
               {tyre.current_nsd != null ? `${tyre.current_nsd} mm` : (tyre.initial_nsd != null ? `${tyre.initial_nsd} mm` : '-')}
               {isLowNsd && <span className="badge badge-critical" style={{ marginLeft: '0.5rem', fontSize: '0.75rem' }}>&lt; 2mm (Scrap Only)</span>}
             </div>
+            {tyre.last_nsd_date && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                As of {formatDate(tyre.last_nsd_date)}
+              </div>
+            )}
           </div>
+
+          {/* Tyre Pressure Section */}
+          <div>
+            <div className="detail-label">Current Tyre Pressure</div>
+            <div className="detail-value" style={{ fontWeight: 600, fontSize: '1.05rem' }}>
+              {tyre.current_pressure != null ? formatPressure(tyre.current_pressure, pressureUnit) : '-'}
+            </div>
+            {tyre.last_pressure_date && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                As of {formatDate(tyre.last_pressure_date)}
+              </div>
+            )}
+          </div>
+
+          {/* Tyre Distance (KMs) */}
+          <div>
+            <div className="detail-label">Total Distance Travelled (Tyre KMs)</div>
+            <div className="detail-value" style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--primary)' }}>
+              {tyre.total_distance_km != null ? `${tyre.total_distance_km.toLocaleString()} km` : '0 km'}
+            </div>
+          </div>
+
+          {/* Status & In-Store Classification */}
           <div>
             <div className="detail-label">Status</div>
             <div className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -209,21 +239,26 @@ export default function TyreDetailPage() {
               )}
             </div>
           </div>
-          <div>
-            <div className="detail-label">Total Distance Travelled</div>
-            <div className="detail-value" style={{ fontWeight: 600 }}>
-              {tyre.total_distance_km != null ? `${tyre.total_distance_km.toLocaleString()} km` : '0 km'}
-            </div>
-          </div>
+
           <div><div className="detail-label">Current Depot</div><div className="detail-value">{tyre.depot_name || '-'}</div></div>
+          
+          {/* Bus & Bus Odometer KMs */}
           <div>
             <div className="detail-label">Current Bus / Position</div>
             <div className="detail-value">
               {tyre.bus_registration_no ? (
                 <>
-                  <Link href={`/buses/${tyre.current_bus_id}`}>{tyre.bus_registration_no}</Link> / {tyre.current_position}
+                  <Link href={`/buses/${tyre.current_bus_id}`} style={{ fontWeight: 600 }}>{tyre.bus_registration_no}</Link>
+                  {' '}/ Position: <strong>{tyre.current_position}</strong>
+                  {tyre.bus_odometer_km != null && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                      Bus Odometer: {tyre.bus_odometer_km.toLocaleString()} km
+                    </div>
+                  )}
                 </>
-              ) : '-' }
+              ) : (
+                <span style={{ color: 'var(--text-muted)' }}>Not mounted on any bus</span>
+              )}
             </div>
           </div>
         </div>

@@ -21,7 +21,8 @@ const SELECT_BUS = `
     d.name AS depot_name, d.code AS depot_code,
     p.name AS package_name, p.code AS package_code,
     m.name AS bus_model_name, m.manufacturer AS bus_model_manufacturer,
-    m.num_positions AS num_tyre_positions, m.position_labels_json AS position_labels_json
+    m.num_positions AS num_tyre_positions, m.position_labels_json AS position_labels_json,
+    (SELECT COUNT(*) FROM tyres WHERE current_bus_id = b.id) AS mounted_tyres_count
   FROM buses b
   JOIN depots d ON d.id = b.depot_id
   LEFT JOIN packages p ON p.id = b.package_id
@@ -121,13 +122,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const mountedTyres = await db
     .prepare(`
       SELECT
-        t.id, t.tyre_number, t.current_position, t.status,
-        (SELECT nsd_value FROM tyre_events WHERE tyre_id = t.id AND event_type = 'nsd_reading' ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_value,
-        (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND event_type = 'nsd_reading' ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_date,
-        (SELECT pressure_value FROM tyre_events WHERE tyre_id = t.id AND event_type = 'pressure_reading' ORDER BY event_date DESC, id DESC LIMIT 1) AS last_pressure_value,
-        (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND event_type = 'pressure_reading' ORDER BY event_date DESC, id DESC LIMIT 1) AS last_pressure_date,
+        t.id, t.tyre_number, t.brand, t.model, t.size, t.current_position, t.status,
+        COALESCE(
+          (SELECT nsd_value FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1),
+          t.initial_nsd
+        ) AS last_nsd_value,
+        (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND nsd_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_nsd_date,
+        (SELECT pressure_value FROM tyre_events WHERE tyre_id = t.id AND pressure_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_pressure_value,
+        (SELECT event_date FROM tyre_events WHERE tyre_id = t.id AND pressure_value IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS last_pressure_date,
         (SELECT event_date FROM tyre_events WHERE tyre_id = t.id ORDER BY event_date DESC, id DESC LIMIT 1) AS last_event_date,
-        (SELECT flag_status FROM tyre_events WHERE tyre_id = t.id AND event_type IN ('nsd_reading', 'pressure_reading') ORDER BY event_date DESC, id DESC LIMIT 1) AS flag_status
+        (SELECT flag_status FROM tyre_events WHERE tyre_id = t.id AND flag_status IS NOT NULL ORDER BY event_date DESC, id DESC LIMIT 1) AS flag_status
       FROM tyres t WHERE t.current_bus_id = ?
     `)
     .all(req.params.id);
@@ -136,6 +140,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
     position: label,
     tyre: tyreByPosition[label] || null,
   }));
+
+  const nsdValues = mountedTyres.map((t) => t.last_nsd_value).filter((v) => v != null && !isNaN(v));
+  const pressureValues = mountedTyres.map((t) => t.last_pressure_value).filter((v) => v != null && !isNaN(v));
+
+  bus.avg_nsd = nsdValues.length ? Number((nsdValues.reduce((a, b) => a + b, 0) / nsdValues.length).toFixed(1)) : null;
+  bus.min_nsd = nsdValues.length ? Math.min(...nsdValues) : null;
+  bus.avg_pressure = pressureValues.length ? Number((pressureValues.reduce((a, b) => a + b, 0) / pressureValues.length).toFixed(1)) : null;
+  bus.min_pressure = pressureValues.length ? Math.min(...pressureValues) : null;
+  bus.mounted_tyres_count = mountedTyres.length;
 
   res.json(bus);
 }));

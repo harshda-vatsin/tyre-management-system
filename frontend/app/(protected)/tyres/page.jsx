@@ -5,7 +5,9 @@ import { useSearchParams } from 'next/navigation';
 import { Plus, CircleDot, UploadCloud } from 'lucide-react';
 import { api } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
+import { useSettings } from '../../../components/SettingsContext.jsx';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
+import { formatPressure } from '../../../lib/units.js';
 import PageHeader from '../../../components/PageHeader.jsx';
 import Drawer from '../../../components/Drawer.jsx';
 import RowActionsMenu from '../../../components/RowActionsMenu.jsx';
@@ -49,6 +51,7 @@ function emptyForm(defaultDepotId) {
 
 export default function TyresPage() {
   const { user } = useAuth();
+  const { pressureUnit } = useSettings();
   const searchParams = useSearchParams();
   const canWrite = user?.role === ROLES.ADMIN || user?.role === ROLES.DEPOT_MANAGER;
   const isFleetWide = FLEET_WIDE_ROLES.includes(user?.role);
@@ -238,6 +241,7 @@ export default function TyresPage() {
                     <th>Brand</th>
                     <th>Status</th>
                     <th>Current NSD</th>
+                    <th>Pressure</th>
                     <th>Depot</th>
                     <th>Bus / Position</th>
                     {canWrite && <th></th>}
@@ -269,6 +273,11 @@ export default function TyresPage() {
                           {t.current_nsd != null ? `${t.current_nsd} mm` : (t.initial_nsd != null ? `${t.initial_nsd} mm` : '-')}
                         </span>
                       </td>
+                      <td>
+                        <span style={{ fontWeight: 500 }}>
+                          {t.current_pressure != null ? formatPressure(t.current_pressure, pressureUnit) : '-'}
+                        </span>
+                      </td>
                       <td>{t.depot_name || '-'}</td>
                       <td>{t.bus_registration_no ? `${t.bus_registration_no} / ${t.current_position}` : '-'}</td>
                       {canWrite && (
@@ -297,6 +306,12 @@ export default function TyresPage() {
                   <div className="mobile-card-row">
                     <span className="mobile-card-label">Brand / Size</span>
                     <span className="mobile-card-value">{t.brand} {t.size ? `(${t.size})` : ''}</span>
+                  </div>
+                  <div className="mobile-card-row">
+                    <span className="mobile-card-label">NSD / Pressure</span>
+                    <span className="mobile-card-value">
+                      {t.current_nsd != null ? `${t.current_nsd} mm` : '-'} / {t.current_pressure != null ? formatPressure(t.current_pressure, pressureUnit) : '-'}
+                    </span>
                   </div>
                   <div className="mobile-card-row">
                     <span className="mobile-card-label">Depot</span>

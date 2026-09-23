@@ -126,11 +126,50 @@ export default function BusDetailPage() {
           <div><div className="detail-label">Chassis Number (VIN)</div><div className="detail-value">{bus.chassis_no}</div></div>
           <div><div className="detail-label">Model / Make</div><div className="detail-value">{bus.bus_model_name} ({bus.bus_model_manufacturer})</div></div>
           <div><div className="detail-label">Associated Depot</div><div className="detail-value">{bus.depot_name}</div></div>
-          <div><div className="detail-label">Number of Tyre Positions</div><div className="detail-value">{bus.num_tyre_positions}</div></div>
+          <div>
+            <div className="detail-label">Tyres Mounted / Capacity</div>
+            <div className="detail-value" style={{ fontWeight: 600 }}>
+              {bus.mounted_tyres_count != null ? `${bus.mounted_tyres_count} / ${bus.num_tyre_positions} Tyres Fitted` : `${bus.num_tyre_positions} Positions`}
+            </div>
+          </div>
+          <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[bus.status] || ''}`}>{bus.status}</span></div></div>
+          
+          {/* Bus Distance / Odometer (KMs) */}
+          <div>
+            <div className="detail-label">Total Distance Travelled (Bus KMs)</div>
+            <div className="detail-value" style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--primary)' }}>
+              {bus.odometer_km != null ? `${bus.odometer_km.toLocaleString()} km` : '0 km'}
+            </div>
+          </div>
+
+          {/* Bus Fleet NSD Section */}
+          <div>
+            <div className="detail-label">Bus Average NSD</div>
+            <div className="detail-value" style={{ fontWeight: 700, fontSize: '1.1rem' }}>
+              {bus.avg_nsd != null ? `${bus.avg_nsd} mm` : '-'}
+            </div>
+            {bus.min_nsd != null && (
+              <div style={{ fontSize: '0.75rem', color: bus.min_nsd < 2.0 ? 'var(--critical)' : 'var(--text-muted)', marginTop: '0.2rem', fontWeight: bus.min_nsd < 2.0 ? 700 : 500 }}>
+                Min Tyre NSD: {bus.min_nsd} mm {bus.min_nsd < 2.0 && '⚠️ (< 2mm Scrap Alert)'}
+              </div>
+            )}
+          </div>
+
+          {/* Bus Fleet Pressure Section */}
+          <div>
+            <div className="detail-label">Bus Avg Tyre Pressure</div>
+            <div className="detail-value" style={{ fontWeight: 600, fontSize: '1.05rem' }}>
+              {bus.avg_pressure != null ? formatPressure(bus.avg_pressure, pressureUnit) : '-'}
+            </div>
+            {bus.min_pressure != null && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                Min Tyre Pressure: {formatPressure(bus.min_pressure, pressureUnit)}
+              </div>
+            )}
+          </div>
+
           <div><div className="detail-label">Year of Manufacture</div><div className="detail-value">{bus.year_of_manufacture || '-'}</div></div>
           <div><div className="detail-label">Date of Entry into Fleet</div><div className="detail-value">{formatDate(bus.date_of_entry_into_fleet)}</div></div>
-          <div><div className="detail-label">Status</div><div className="detail-value"><span className={`badge ${STATUS_BADGE[bus.status] || ''}`}>{bus.status}</span></div></div>
-          <div><div className="detail-label">Total Distance Travelled (Odometer)</div><div className="detail-value" style={{ fontWeight: 600 }}>{bus.odometer_km.toLocaleString()} km</div></div>
         </div>
       </div>
 
