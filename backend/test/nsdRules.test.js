@@ -179,3 +179,57 @@ test('an invalid groove is rejected even when a valid manual nsd_value is suppli
   );
   assert.equal((await db.prepare('SELECT COUNT(*)::int AS c FROM tyre_events WHERE tyre_id = ?').get(tyre.id)).c, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Same scenarios through the real HTTP routes (what the UI actually calls)
+// ---------------------------------------------------------------------------
+
+async function withServer(fn) {
+  const jwt = require('jsonwebtoken');
+  const { JWT_SECRET } = require('../src/middleware/auth');
+  const app = require('../src/app');
+  const server = app.listen(0);
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const token = jwt.sign({ id: admin.id, username: 'nsd_rules_admin', role: ROLES.ADMIN, depot_id: null }, JWT_SECRET, { expiresIn: '5m' });
+    const post = (path, body) => fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    await fn(post);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test('POST /api/events: four grooves (min 2) with NSD value omitted or blank raises a Critical alert', async () => {
+  await withServer(async (post) => {
+    for (const body of [{ nsd_g1: 6, nsd_g2: 2, nsd_g3: 5, nsd_g4: 7 }, { nsd_value: '', nsd_g1: 6, nsd_g2: 2, nsd_g3: 5, nsd_g4: 7 }]) {
+      const tyre = await seedMountedTyre();
+      const res = await post('/api/events', { event_type: 'nsd_reading', tyre_id: tyre.id, ...body });
+      assert.equal(res.status, 201, JSON.stringify(await res.clone().json()));
+      const event = await res.json();
+      assert.equal(event.nsd_value, 2);
+      assert.equal(event.flag_status, 'CRITICAL');
+      const alert = await latestAlert(tyre.id);
+      assert.equal(alert.severity, 'Critical');
+      assert.equal(alert.status, 'Open');
+    }
+  });
+});
+
+test('POST /api/events/batch: four grooves (min 2) with no nsd_value raises a Critical alert', async () => {
+  await withServer(async (post) => {
+    const tyre = await seedMountedTyre();
+    const res = await post('/api/events/batch', {
+      bus_id: tyre.current_bus_id,
+      readings: [{ tyre_id: tyre.id, nsd_g1: 6, nsd_g2: 2, nsd_g3: 5, nsd_g4: 7 }],
+    });
+    const body = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(body));
+    assert.equal(body.created[0].nsd_value, 2);
+    assert.equal(body.created[0].flag_status, 'CRITICAL');
+    assert.equal((await latestAlert(tyre.id)).severity, 'Critical');
+  });
+});

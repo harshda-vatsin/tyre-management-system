@@ -190,7 +190,13 @@ export default function LogEventPage() {
       setError('Select a tyre first');
       return;
     }
-    if (eventType === 'nsd_reading') {
+    // With all four grooves entered the server derives NSD as their minimum,
+    // so the main NSD field isn't required (it's marked optional in that case).
+    const allGroovesValid = ['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].every((k) => {
+      const v = fields[k];
+      return v !== undefined && v !== null && v !== '' && !isNaN(Number(v)) && Number(v) >= 0 && Number(v) <= 25;
+    });
+    if (eventType === 'nsd_reading' && !allGroovesValid) {
       const val = Number(fields.nsd_value);
       if (fields.nsd_value === undefined || fields.nsd_value === null || fields.nsd_value === '' || isNaN(val) || val < 0 || val > 25) {
         setError('NSD (mm) must be between 0 and 25');

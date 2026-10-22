@@ -55,7 +55,7 @@ export default function BatchInspectionPage() {
   const [pressureThreshold, setPressureThreshold] = useState(null);
 
   useEffect(() => {
-    api.get('/depots').then(setDepots).catch(() => {});
+    api.get('/depots').then(setDepots).catch(() => { });
   }, []);
 
   // Depot-scoped roles (Depot Manager, Tyre Supervisor) are locked to their
@@ -86,8 +86,8 @@ export default function BatchInspectionPage() {
 
   useEffect(() => {
     if (!bus) return;
-    api.get(`/thresholds/resolve?parameter_type=NSD&depot_id=${bus.depot_id}`).then(setNsdThreshold).catch(() => {});
-    api.get(`/thresholds/resolve?parameter_type=PRESSURE&bus_model_id=${bus.bus_model_id}`).then(setPressureThreshold).catch(() => {});
+    api.get(`/thresholds/resolve?parameter_type=NSD&depot_id=${bus.depot_id}`).then(setNsdThreshold).catch(() => { });
+    api.get(`/thresholds/resolve?parameter_type=PRESSURE&bus_model_id=${bus.bus_model_id}`).then(setPressureThreshold).catch(() => { });
   }, [bus]);
 
   function setReading(tyreId, field, value) {
@@ -119,7 +119,12 @@ export default function BatchInspectionPage() {
     return 'OK';
   }
 
-  const nsdFlag = evaluateNsd(modalNsd, nsdThreshold);
+  // Same rule as the server (createReadingEvent): with all four grooves
+  // entered, their minimum is the effective NSD whatever the main field says.
+  const modalGrooveValues = ['nsd_g1', 'nsd_g2', 'nsd_g3', 'nsd_g4'].map((k) => modalGrooves[k]);
+  const allModalGroovesFilled = modalGrooveValues.every((v) => v !== '' && v !== undefined && !Number.isNaN(Number(v)));
+  const effectiveModalNsd = allModalGroovesFilled ? Math.min(...modalGrooveValues.map(Number)) : modalNsd;
+  const nsdFlag = evaluateNsd(effectiveModalNsd, nsdThreshold);
   const pressureFlag = evaluatePressure(modalPressure, pressureThreshold);
 
   // Handles both a mounted tyre (opens the NSD/Pressure form, pre-filled with
@@ -434,7 +439,7 @@ export default function BatchInspectionPage() {
                   />
                 ))}
               </div>
-              <span className="field-hint">If all 4 are entered and NSD Value is left blank, NSD Value is taken as their minimum.</span>
+              <span className="field-hint">If all 4 are entered, NSD Value is always set to their minimum (a typed value is ignored).</span>
             </div>
             <div className="field">
               <label>Pressure Value</label>
