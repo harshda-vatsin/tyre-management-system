@@ -20,8 +20,9 @@ const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || '127.0.0.1';
 
 if (!process.env.JWT_SECRET) {
-  // Not fatal -- the dev fallback in middleware/auth.js still works -- but
-  // every token would be signed with a publicly-known secret in production.
+  // Production startup already failed in middleware/auth.js if this is
+  // missing; outside production the dev fallback is used, which must never
+  // be relied on for a real deployment.
   console.warn('[EBTMS] JWT_SECRET is not set. Using the insecure development default is unsafe in production.');
 }
 

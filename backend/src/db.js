@@ -920,6 +920,28 @@ const ready = (async () => {
     CREATE INDEX IF NOT EXISTS idx_event_photos_tyre ON event_photos(tyre_id);
   `);
 
+  // Server-side refresh sessions (see routes/auth.js). Only a SHA-256 hash of
+  // the opaque refresh token is stored, so a database leak can't be replayed.
+  // Each login starts a family_id; rotating a token inserts a new row in the
+  // same family and marks the old one revoked/replaced, which lets a replayed
+  // (stolen) token be detected and the whole family killed. Timestamps are
+  // ISO-8601 UTC text, so they compare correctly as strings.
+  await exec(`
+    CREATE TABLE IF NOT EXISTS refresh_sessions (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      family_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      family_expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      replaced_at TEXT,
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+    CREATE INDEX IF NOT EXISTS idx_refresh_sessions_user ON refresh_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_refresh_sessions_family ON refresh_sessions(family_id);
+  `);
+
   // The outcome CHECK constraint's definition lives in EVENT_OUTCOMES, not
   // in this file (see buildOutcomeCheckSql above) -- but CREATE TABLE IF
   // NOT EXISTS only applies to a table that doesn't exist yet, so an

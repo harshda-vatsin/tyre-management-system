@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Html5Qrcode } from 'html5-qrcode';
 import { AlertTriangle, CheckCircle2, RotateCcw, Search, ScanLine } from 'lucide-react';
-import { api } from '../../../lib/api.js';
+import { api, fetchBlob } from '../../../lib/api.js';
 import { parseQrPayload } from '../../../lib/qrPayload.js';
 import PageHeader from '../../../components/PageHeader.jsx';
 import TyreSelect from '../../../components/TyreSelect.jsx';
@@ -12,17 +12,7 @@ import TyreSelect from '../../../components/TyreSelect.jsx';
 // Shared by both the QR-decode path and the manual-search fallback: given a
 // resolved tyre id, fetches the authenticated Tyre Card PDF and opens it.
 async function openTyreCardPdf(tyreId) {
-  const token = localStorage.getItem('ebtms_token');
-  const pdfRes = await fetch(`/api/tyres/${tyreId}/export-pdf`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!pdfRes.ok) {
-    const data = await pdfRes.json().catch(() => ({}));
-    const err = new Error(data.error || 'Failed to fetch Tyre Card PDF');
-    err.status = pdfRes.status;
-    throw err;
-  }
-  const blob = await pdfRes.blob();
+  const blob = await fetchBlob(`/tyres/${tyreId}/export-pdf`, 'Failed to fetch Tyre Card PDF');
   const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
   const win = window.open(url, '_blank');
   if (!win) window.location.href = url;

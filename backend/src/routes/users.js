@@ -6,6 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { ROLES } = require('../utils/roles');
 const { asyncHandler } = require('../utils/asyncHandler');
+const { revokeAllForUser } = require('../utils/refreshSessions');
 
 const router = express.Router();
 
@@ -161,6 +162,8 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
   }
 
   await db.prepare(`UPDATE users SET is_active = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(is_active ? 1 : 0, req.params.id);
+  // A deactivated user must not be able to keep renewing a session.
+  if (!is_active) await revokeAllForUser(before.id);
 
   const after = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: after.id, before: serialize(before), after: serialize(after) });
@@ -178,6 +181,7 @@ router.post('/:id/reset-password', asyncHandler(async (req, res) => {
 
   const passwordHash = bcrypt.hashSync(new_password, 10);
   await db.prepare(`UPDATE users SET password_hash = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(passwordHash, req.params.id);
+  await revokeAllForUser(user.id);
 
   await writeAuditLog({ user: req.user, action: 'UPDATE', entityType: 'user', entityId: user.id, before: { password: '(hidden)' }, after: { password: '(reset by admin)' } });
   res.json({ message: 'Password reset successfully' });

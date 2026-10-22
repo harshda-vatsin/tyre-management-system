@@ -8,8 +8,32 @@
 const jwt = require('jsonwebtoken');
 const { isDepotScoped } = require('../utils/roles');
 
+const DEV_JWT_SECRET = 'dev-secret-change-in-production';
+const PLACEHOLDER_SECRETS = new Set([DEV_JWT_SECRET, 'change-this-in-production']);
+
+/**
+ * Resolves the JWT signing secret. In production the secret must be set
+ * explicitly, be non-placeholder, and be long enough -- otherwise startup
+ * fails rather than silently signing tokens with a publicly known value.
+ * It must also be identical across restarts/deployments/instances, since a
+ * changed secret invalidates every outstanding access token.
+ *
+ * @param {NodeJS.ProcessEnv} [env] - Environment to read (injectable for tests)
+ * @returns {string} The secret
+ */
+function resolveJwtSecret(env = process.env) {
+  const secret = env.JWT_SECRET;
+  if (env.NODE_ENV === 'production') {
+    if (!secret || PLACEHOLDER_SECRETS.has(secret) || secret.length < 32) {
+      throw new Error('JWT_SECRET must be set to a unique value of at least 32 characters in production (e.g. `openssl rand -hex 32`).');
+    }
+    return secret;
+  }
+  return secret || DEV_JWT_SECRET;
+}
+
 // Secret key used to sign and verify JSON Web Tokens
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+const JWT_SECRET = resolveJwtSecret();
 
 /**
  * Express middleware to authenticate request using a JWT token in the Authorization header.
@@ -24,15 +48,18 @@ function authenticate(req, res, next) {
   const [scheme, token] = header.split(' ');
 
   if (scheme !== 'Bearer' || !token) {
-    return res.status(401).json({ error: 'Missing or malformed Authorization header' });
+    return res.status(401).json({ error: 'Missing or malformed Authorization header', code: 'TOKEN_MISSING' });
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     req.user = payload;
     next();
   } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    // `code` lets the frontend tell a routine access-token expiry (silently
+    // refreshed) apart from a token that was never valid.
+    const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID';
+    return res.status(401).json({ error: 'Invalid or expired token', code });
   }
 }
 
@@ -88,4 +115,4 @@ function enforceDepotScope(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, authorize, enforceDepotScope, JWT_SECRET };
+module.exports = { authenticate, authorize, enforceDepotScope, JWT_SECRET, resolveJwtSecret };
