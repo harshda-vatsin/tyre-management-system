@@ -349,7 +349,7 @@ export default function LogEventPage() {
                   </div>
                 ))}
               </div>
-              <span className="field-hint">If all 4 groove points are entered and NSD Value is left blank, NSD Value is taken as their minimum.</span>
+              <span className="field-hint">If all 4 groove points are entered, NSD Value is always set to their minimum (a typed value is ignored).</span>
             </div>
             <div className="field">
               <label>Event Date</label>
@@ -664,15 +664,15 @@ export default function LogEventPage() {
         const effectiveNsd = fields.nsd_value !== undefined && fields.nsd_value !== ''
           ? Number(fields.nsd_value)
           : (tyre?.current_nsd != null ? Number(tyre.current_nsd) : (tyre?.initial_nsd != null ? Number(tyre.initial_nsd) : null));
-        const isUnder2mm = effectiveNsd != null && effectiveNsd < 2.0;
+        const isUnder2mm = effectiveNsd != null && effectiveNsd <= 2.0;
 
         return (
           <>
             {isUnder2mm && (
               <div className="card" style={{ backgroundColor: 'rgba(227, 73, 72, 0.1)', border: '1px solid var(--critical)', padding: '0.75rem', marginBottom: '1rem' }}>
-                <strong style={{ color: 'var(--critical)' }}>⚠️ Ineligible for Retread (NSD &lt; 2.0 mm)</strong>
+                <strong style={{ color: 'var(--critical)' }}>⚠️ Ineligible for Retread (NSD &le; 2.0 mm)</strong>
                 <p style={{ fontSize: '0.85rem', margin: '0.35rem 0' }}>
-                  This tyre has an NSD of <strong>{effectiveNsd} mm</strong>. Under tyre safety rules, tyres with NSD below 2.0 mm cannot proceed through retreading and must be scrapped.
+                  This tyre has an NSD of <strong>{effectiveNsd} mm</strong>. Under tyre safety rules, tyres with NSD at or below 2.0 mm cannot proceed through retreading and must be scrapped.
                 </p>
                 <button
                   type="button"
@@ -685,7 +685,7 @@ export default function LogEventPage() {
                         await api.post('/events', {
                           event_type: 'condemnation',
                           tyre_id: tyre.id,
-                          reason: `Auto-scrapped: NSD (${effectiveNsd} mm) is below 2.0 mm retreading threshold`,
+                          reason: `Auto-scrapped: NSD (${effectiveNsd} mm) is at or below 2.0 mm retreading threshold`,
                           nsd_value: effectiveNsd,
                         });
                         setSuccess('Tyre successfully classified as Scrap.');

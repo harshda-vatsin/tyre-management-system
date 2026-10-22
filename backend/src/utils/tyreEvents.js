@@ -139,6 +139,12 @@ async function maybeUpdateBusOdometer(busId, odometerKm) {
 // claim) is supplementary, not the primary inspection reading nsd_reading
 // represents -- so it's validated with the same physical bounds but is
 // optional and never runs threshold/alert evaluation.
+// Minimum tread depth for a tyre to be retreadable. Deliberately inclusive
+// (<=): it mirrors evaluateNsd()'s CRITICAL rule (value <= critical_max, 2.0 mm
+// by default), so a tyre reported CRITICAL is never allowed through retreading.
+const RETREAD_MIN_NSD_MM = 2.0;
+const isTooWornToRetread = (nsd) => nsd != null && nsd <= RETREAD_MIN_NSD_MM;
+
 function normalizeOptionalNsd(value) {
   if (value === undefined || value === null || value === '') return null;
   const result = validateNsd(value);
@@ -324,12 +330,12 @@ async function createReadingEvent(user, eventType, { tyre_id, nsd_value, nsd_g1,
     };
     const grooveValues = Object.values(grooves);
     const allGroovesGiven = grooveValues.every((v) => v !== null);
-    // Matches the Excel's own "Min" column: nsd_value is authoritative and
-    // stays a manual entry when supplied, only auto-derived as the minimum
-    // of the 4 tread-groove points when the caller gave all 4 and skipped it.
-    const effectiveNsdValue = (nsd_value === undefined || nsd_value === null || nsd_value === '') && allGroovesGiven
-      ? Math.min(...grooveValues)
-      : nsd_value;
+    // Matches the Excel's own "Min" column. When all 4 grooves are given (and
+    // already validated above) the server-computed minimum is authoritative:
+    // a client-supplied nsd_value -- whether the UI's auto-calculated copy or
+    // a manual entry -- is ignored, so a higher manual figure can never mask
+    // a worn groove. With fewer than 4 grooves, nsd_value is used as given.
+    const effectiveNsdValue = allGroovesGiven ? Math.min(...grooveValues) : nsd_value;
     const result = validateNsd(effectiveNsdValue);
     if (!result.valid) throw new ApiError(400, result.error);
     nsd = result.value;
@@ -1003,13 +1009,13 @@ async function createRetreadSent(user, { tyre_id, vendor_name, vendor_location, 
   }
   assertDepotScope(user, tyre.current_depot_id);
 
-  // Business Rule: Tyres with NSD < 2.0 mm cannot proceed through retread workflow and must be scrapped
+  // Business Rule: Tyres with NSD <= 2.0 mm cannot proceed through retread workflow and must be scrapped
   const effectiveNsd = await getEffectiveTyreNsd(tyre.id, nsd_value);
-  if (effectiveNsd != null && effectiveNsd < 2.0) {
+  if (isTooWornToRetread(effectiveNsd)) {
     if (auto_scrap) {
       return createCondemnation(user, {
         tyre_id: tyre.id,
-        reason: reason || `Auto-scrapped: NSD (${effectiveNsd} mm) is below 2.0 mm retreading threshold`,
+        reason: reason || `Auto-scrapped: NSD (${effectiveNsd} mm) is at or below 2.0 mm retreading threshold`,
         nsd_value: effectiveNsd,
         odometer_km,
         vendor_name,
@@ -1018,7 +1024,7 @@ async function createRetreadSent(user, { tyre_id, vendor_name, vendor_location, 
         event_date,
       });
     }
-    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (below the 2.0 mm minimum required for retreading). It cannot be retreaded and must be classified as Scrap.`);
+    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (at or below the 2.0 mm limit for retreading). It cannot be retreaded and must be classified as Scrap.`);
   }
 
   const nsd = normalizeOptionalNsd(nsd_value);
@@ -1056,8 +1062,8 @@ async function createRetreadStarted(user, { tyre_id, vendor_name, vendor_locatio
   }
 
   const effectiveNsd = await getEffectiveTyreNsd(tyre.id);
-  if (effectiveNsd != null && effectiveNsd < 2.0) {
-    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (below 2.0 mm minimum required for retreading). It cannot be retreaded and must be classified as Scrap.`);
+  if (isTooWornToRetread(effectiveNsd)) {
+    throw new ApiError(400, `Tyre ${tyre.tyre_number} has an NSD of ${effectiveNsd} mm (at or below the 2.0 mm limit for retreading). It cannot be retreaded and must be classified as Scrap.`);
   }
 
   const event = await insertEventRow({
