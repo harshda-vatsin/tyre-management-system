@@ -3,8 +3,9 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Search, Info } from 'lucide-react';
-import { api } from '../../../lib/api.js';
+import { api, uploadEventPhotos } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
+import PhotoPicker from '../../../components/PhotoPicker.jsx';
 import { useSettings } from '../../../components/SettingsContext.jsx';
 import { formatPressure, psiToKpa, kpaToPsi } from '../../../lib/units.js';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
@@ -30,6 +31,12 @@ export default function BatchInspectionPage() {
   const [bus, setBus] = useState(null);
   const [readings, setReadings] = useState({});
   const [result, setResult] = useState(null);
+  // Optional photos per tyre (keyed by tyre id), uploaded after the batch is
+  // saved. Uploads that fail wait in photoRetry so the readings are never
+  // re-submitted just to retry a photo.
+  const [photos, setPhotos] = useState({});
+  const [modalPhotos, setModalPhotos] = useState([]);
+  const [photoRetry, setPhotoRetry] = useState([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -125,6 +132,7 @@ export default function BatchInspectionPage() {
       const existing = readings[slot.tyre.id] || {};
       setModalNsd(existing.nsd_value ?? '');
       setModalPressure(existing.pressure_value ?? '');
+      setModalPhotos(photos[slot.tyre.id] || []);
       setModalGrooves({
         nsd_g1: existing.nsd_g1 ?? '',
         nsd_g2: existing.nsd_g2 ?? '',
@@ -138,11 +146,13 @@ export default function BatchInspectionPage() {
     setActiveSlot(null);
     setModalNsd('');
     setModalPressure('');
+    setModalPhotos([]);
     setModalGrooves({ nsd_g1: '', nsd_g2: '', nsd_g3: '', nsd_g4: '' });
   }
 
   function saveTyreReading(e) {
     e.preventDefault();
+    setPhotos((p) => ({ ...p, [activeSlot.tyre.id]: modalPhotos }));
     setReadings((r) => ({
       ...r,
       [activeSlot.tyre.id]: { ...r[activeSlot.tyre.id], nsd_value: modalNsd, pressure_value: modalPressure, ...modalGrooves },
@@ -194,6 +204,44 @@ export default function BatchInspectionPage() {
     );
   }
 
+  // Attaches each tyre's photos to its saved reading (NSD event preferred,
+  // pressure event otherwise). Failures are parked in photoRetry, not thrown:
+  // the readings themselves are already saved.
+  async function uploadPhotos(createdEvents, photosByTyre) {
+    const jobs = Object.entries(photosByTyre)
+      .filter(([, files]) => files.length > 0)
+      .map(([tyreId, files]) => {
+        const tyreEvents = createdEvents.filter((ev) => ev.tyre_id === Number(tyreId));
+        const target = tyreEvents.find((ev) => ev.event_type === 'nsd_reading') || tyreEvents[0];
+        return target ? { tyreId: Number(tyreId), eventId: target.id, files } : null;
+      })
+      .filter(Boolean);
+
+    const failed = [];
+    for (const job of jobs) {
+      try {
+        await uploadEventPhotos(job.eventId, job.files);
+      } catch (err) {
+        failed.push({ ...job, reason: err.message });
+      }
+    }
+    setPhotoRetry(failed);
+  }
+
+  async function handlePhotoRetry() {
+    setSubmitting(true);
+    const failed = [];
+    for (const job of photoRetry) {
+      try {
+        await uploadEventPhotos(job.eventId, job.files);
+      } catch (err) {
+        failed.push({ ...job, reason: err.message });
+      }
+    }
+    setPhotoRetry(failed);
+    setSubmitting(false);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -220,6 +268,8 @@ export default function BatchInspectionPage() {
       const data = await api.post('/events/batch', { bus_id: Number(busId), readings: entries });
       setResult(data);
       setReadings({});
+      await uploadPhotos(data.created, photos);
+      setPhotos({});
     } catch (err) {
       setError(err.message);
     } finally {
@@ -317,6 +367,14 @@ export default function BatchInspectionPage() {
                     {result.errors.map((e, i) => <div key={i}>Tyre {e.tyre_id}: {e.error}</div>)}
                   </div>
                 )}
+                {photoRetry.length > 0 && (
+                  <div className="error-text">
+                    {photoRetry.map((job) => (
+                      <div key={job.eventId}>Photos for tyre {job.tyreId} could not be uploaded: {job.reason}</div>
+                    ))}
+                    <button type="button" className="secondary" disabled={submitting} onClick={handlePhotoRetry}>Retry photo upload</button>
+                  </div>
+                )}
               </div>
             )}
             <button type="submit" disabled={submitting || mountedSlots.length === 0} style={{ marginTop: '0.75rem' }}>
@@ -396,6 +454,7 @@ export default function BatchInspectionPage() {
                 </span>
               )}
             </div>
+            <PhotoPicker files={modalPhotos} onChange={setModalPhotos} />
             <div className="form-actions">
               <button type="submit">Save Reading</button>
               <button type="button" className="secondary" onClick={closeTyreModal}>Cancel</button>

@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
-import { api } from '../../../lib/api.js';
+import { api, uploadEventPhotos } from '../../../lib/api.js';
 import { useAuth } from '../../../components/AuthContext.jsx';
+import PhotoPicker from '../../../components/PhotoPicker.jsx';
 import { ROLES, FLEET_WIDE_ROLES } from '../../../lib/roles.js';
 import TyreSelect from '../../../components/TyreSelect.jsx';
 import BusSelect from '../../../components/BusSelect.jsx';
@@ -29,6 +30,11 @@ export default function LogEventPage() {
   const [destPositions, setDestPositions] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  // Optional photos for NSD/pressure readings. Uploaded after the reading is
+  // saved; if that upload fails the files wait in photoRetry for a retry
+  // rather than being lost or forcing the reading to be logged twice.
+  const [photos, setPhotos] = useState([]);
+  const [photoRetry, setPhotoRetry] = useState(null);
 
   // Replacement is looked up by Bus + position (click a wheel on the
   // diagram) rather than the free-text tyre search every other event type
@@ -234,10 +240,15 @@ export default function LogEventPage() {
         const payload = { event_type: eventType, tyre_id: tyre.id, ...fields };
         const result = await api.post('/events', payload);
         count = Array.isArray(result) ? result.length : 1;
+        if (photos.length > 0 && ['nsd_reading', 'pressure_reading'].includes(eventType)) {
+          const created = Array.isArray(result) ? result.find((ev) => ev.event_type === eventType) : result;
+          await attachPhotos(created.id, photos);
+        }
       }
       setMessage(`Event logged successfully (${count} tyre card ${count === 1 ? 'entry' : 'entries'} created).`);
       setTyre(null);
       setFields({});
+      setPhotos([]);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -247,6 +258,26 @@ export default function LogEventPage() {
 
   function set(key, value) {
     setFields((f) => ({ ...f, [key]: value }));
+  }
+
+  // The reading is already saved at this point, so a photo failure must not
+  // surface as a failed submit -- park the files for a retry instead.
+  async function attachPhotos(eventId, files) {
+    try {
+      await uploadEventPhotos(eventId, files);
+      setPhotoRetry(null);
+      return true;
+    } catch (err) {
+      setPhotoRetry({ eventId, files, reason: err.message });
+      return false;
+    }
+  }
+
+  async function handlePhotoRetry() {
+    setSaving(true);
+    const ok = await attachPhotos(photoRetry.eventId, photoRetry.files);
+    setSaving(false);
+    if (ok) setMessage('Photos uploaded.');
   }
 
   // Shared by Fitment, Puncture Repair's remount, and Inter-Bus Transfer --
@@ -974,7 +1005,18 @@ export default function LogEventPage() {
           <div className="form-section-title">Details</div>
           {renderTypeFields()}
 
-          {error && <div className="error-text" style={{ marginBottom: '0.75rem' }}>{error}</div>}
+          {['nsd_reading', 'pressure_reading'].includes(eventType) && (
+            <PhotoPicker files={photos} onChange={setPhotos} disabled={saving} />
+          )}
+
+          {photoRetry && (
+            <div className="error-text" style={{ marginBottom: '0.75rem' }}>
+              The reading was saved, but its photos could not be uploaded ({photoRetry.reason}).{' '}
+              <button type="button" className="secondary" disabled={saving} onClick={handlePhotoRetry}>Retry photo upload</button>
+            </div>
+          )}
+
+          {error &&<div className="error-text" style={{ marginBottom: '0.75rem' }}>{error}</div>}
           {message && (
             <div className="status-banner success" style={{ marginBottom: '0.75rem' }}>
               <CheckCircle2 size={16} /> <span>{message}</span>

@@ -902,6 +902,24 @@ const ready = (async () => {
     CREATE INDEX IF NOT EXISTS idx_wheel_alignments_source_mis ON wheel_alignments(source_mis_record_type, source_mis_record_id);
   `);
 
+  // Optional photos attached to a tyre_events row (e.g. an NSD/pressure
+  // reading). Only metadata lives here; the image bytes are on local disk
+  // (utils/eventPhotoStorage.js), keyed by file_name.
+  await exec(`
+    CREATE TABLE IF NOT EXISTS event_photos (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      event_id INTEGER NOT NULL REFERENCES tyre_events(id),
+      tyre_id INTEGER NOT NULL REFERENCES tyres(id),
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      uploaded_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${NOW}
+    );
+    CREATE INDEX IF NOT EXISTS idx_event_photos_event ON event_photos(event_id);
+    CREATE INDEX IF NOT EXISTS idx_event_photos_tyre ON event_photos(tyre_id);
+  `);
+
   // The outcome CHECK constraint's definition lives in EVENT_OUTCOMES, not
   // in this file (see buildOutcomeCheckSql above) -- but CREATE TABLE IF
   // NOT EXISTS only applies to a table that doesn't exist yet, so an

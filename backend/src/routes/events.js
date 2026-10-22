@@ -57,7 +57,8 @@ const SELECT_EVENT = `
     tb.registration_no AS to_bus_registration_no,
     rt.tyre_number AS related_tyre_number,
     d.name AS depot_name,
-    u.username AS performed_by_username, u.full_name AS performed_by_name
+    u.username AS performed_by_username, u.full_name AS performed_by_name,
+    (SELECT COUNT(*) FROM event_photos ph WHERE ph.event_id = e.id)::int AS photo_count
   FROM tyre_events e
   JOIN tyres t ON t.id = e.tyre_id
   LEFT JOIN buses b ON b.id = e.bus_id

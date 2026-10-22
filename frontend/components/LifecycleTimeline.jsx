@@ -7,6 +7,7 @@ import { formatDateTime } from '../lib/dates.js';
 import { AMENDABLE_FIELDS } from '../lib/amendableFields.js';
 import AmendmentTimeline from './AmendmentTimeline.jsx';
 import EmptyState from './EmptyState.jsx';
+import EventPhotos from './EventPhotos.jsx';
 
 // Tyre Passport timeline: a vertical, chronologically-ordered view of every
 // tyre_events row for one tyre (Date, Time, Event, User, Bus, Position,
@@ -49,6 +50,7 @@ export default function LifecycleTimeline({
                   <> &middot; <strong>Bus:</strong> {e.bus_registration_no}{e.position ? ` / ${e.position}` : ''}</>
                 )}
               </div>
+              {e.photo_count > 0 && <EventPhotos eventId={e.id} count={e.photo_count} canDelete={canAmend} />}
               <div className="lifecycle-timeline-actions">
                 {isCorrected && (
                   <button type="button" className="ghost" onClick={() => onToggleExpand(e.id)}>

@@ -136,6 +136,50 @@ export async function uploadFile(path, file) {
 }
 
 /**
+ * Attaches photos to an existing tyre event as multipart/form-data.
+ *
+ * @param {number} eventId - tyre_events id the photos belong to
+ * @param {File[]} files - Already-compressed image files
+ * @returns {Promise<any>} Parsed JSON response (created photo rows)
+ */
+export async function uploadEventPhotos(eventId, files) {
+  const token = getToken();
+  const formData = new FormData();
+  files.forEach((file) => formData.append('photos', file));
+
+  const res = await fetch(`${BASE_URL}/event-photos/events/${eventId}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(data.error || 'Photo upload failed');
+    error.status = res.status;
+    throw error;
+  }
+  return data;
+}
+
+/**
+ * Photos are served only to authenticated requests, so an <img src> can't
+ * point at them directly -- fetch with the Bearer token and hand back an
+ * object URL. The caller must URL.revokeObjectURL() it when done.
+ *
+ * @param {number} photoId - event_photos id
+ * @returns {Promise<string>} Object URL for the image
+ */
+export async function fetchPhotoObjectUrl(photoId) {
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}/event-photos/${photoId}/file`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error('Could not load photo');
+  return URL.createObjectURL(await res.blob());
+}
+
+/**
  * Handles binary report file downloads (PDF and Excel formats).
  * 
  * @param {string} path - Target API segment
